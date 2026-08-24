@@ -183,6 +183,31 @@ class BuildMetadataTests(unittest.TestCase):
                 "#include <optional/header.h>\n",
             )
 
+    def test_static_pkg_config_includes_private_link_dependencies(self):
+        loader = SourceFileLoader("shitty_build_pkg_config", str(ROOT / "build"))
+        spec = importlib.util.spec_from_loader(loader.name, loader)
+        self.assertIsNotNone(spec)
+        runner = importlib.util.module_from_spec(spec)
+        sys.modules[loader.name] = runner
+        loader.exec_module(runner)
+
+        with tempfile.TemporaryDirectory() as directory:
+            root = Path(directory)
+            context = runner.BuildContext(root, root / ".out")
+            with mock.patch.object(
+                runner.subprocess,
+                "check_output",
+                side_effect=["-I/xcb/include\n", "-lxcb -lXau\n"],
+            ) as check_output:
+                dependency = context.pkg_config("xcb", static=True)
+
+            self.assertEqual(dependency.public_cflags, ["-I/xcb/include"])
+            self.assertEqual(dependency.ldflags, ["-lxcb", "-lXau"])
+            self.assertEqual(
+                check_output.call_args_list[1].args[0],
+                ["pkg-config", "xcb", "--static", "--libs"],
+            )
+
     def test_tool_resolution_preserves_the_path_selected_argv_zero(self):
         loader = SourceFileLoader("shitty_build_tool_path", str(ROOT / "build"))
         spec = importlib.util.spec_from_loader(loader.name, loader)

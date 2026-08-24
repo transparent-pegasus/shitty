@@ -387,18 +387,18 @@ class BuildContext:
         self.targets.append(target)
         return target
 
-    def pkg_config(self, *packages: str, required: bool = True) -> Target:
+    def pkg_config(self, *packages: str, required: bool = True, static: bool = False) -> Target:
         tool = os.environ.get("PKG_CONFIG", "pkg-config")
         base = [tool, *packages]
         stderr = None if required else subprocess.DEVNULL
         try:
             cflags = shlex.split(subprocess.check_output(base + ["--cflags"], text=True, stderr=stderr).strip())
-            ldflags = shlex.split(subprocess.check_output(base + ["--libs"], text=True, stderr=stderr).strip())
+            ldflags = shlex.split(subprocess.check_output(base + (["--static"] if static else []) + ["--libs"], text=True, stderr=stderr).strip())
         except (OSError, subprocess.CalledProcessError) as exc:
             if required:
                 raise BuildError(f"pkg-config failed for {' '.join(packages)}: {exc}") from exc
-            return self.interface(enabled=False, name="pkg:" + ",".join(packages))
-        return self.interface(cflags=cflags, ldflags=ldflags, name="pkg:" + ",".join(packages))
+            return self.interface(enabled=False, name=("pkg-static:" if static else "pkg:") + ",".join(packages))
+        return self.interface(cflags=cflags, ldflags=ldflags, name=("pkg-static:" if static else "pkg:") + ",".join(packages))
 
     def pkg_config_variable(self, package: str, variable: str) -> str:
         tool = os.environ.get("PKG_CONFIG", "pkg-config")
