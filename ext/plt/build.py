@@ -91,21 +91,30 @@ if system == "Linux":
         descr="WL",
         color="blue",
     )
-    backend_source = {
-        "src": "$(S)/platform_wayland.cpp",
-        "inputs": protocol_outputs,
-    }
+    backend_sources = [
+        {
+            "src": "$(S)/platform_wayland.cpp",
+            "inputs": protocol_outputs,
+        },
+    ]
     backend_deps = [
         protocols,
         pkg_config("wayland-client >= 1.20"),
         pkg_config("xkbcommon >= 1.0"),
         dependency(ldflags=["-lrt", "-lpthread"]),
     ]
+    xcb = pkg_config("xcb", required=False, static=True)
+    if os.environ.get("PLT_X11_TEST_REQUIRED") == "1" and not xcb:
+        raise RuntimeError("PLT_X11_TEST_REQUIRED=1, but pkg-config could not resolve the XCB backend")
+    if xcb:
+        build.cppflags += ["-DHAVE_X11_BACKEND=1"]
+        backend_sources.append("$(S)/platform_x11.cpp")
+        backend_deps.append(xcb)
 elif system == "Darwin":
     darwin_frameworks = os.path.join(os.environ["OSX_SDK"], "System", "Library", "Frameworks") if "OSX_SDK" in os.environ else None
     if darwin_frameworks:
         build.cppflags += [f"-F{darwin_frameworks}"]
-    backend_source = "$(S)/platform_cocoa.mm"
+    backend_sources = ["$(S)/platform_cocoa.mm"]
     backend_cxxflags = [
         "-fobjc-arc",
         "-fblocks",
@@ -139,7 +148,7 @@ else:
 
 libplt = library(
     name="plt",
-    srcs=[*common_sources, backend_source],
+    srcs=[*common_sources, *backend_sources],
     public_cflags=["-I$(S)", "-I$(S)/.."],
     cxxflags=locals().get("backend_cxxflags", []),
     deps=[libstd, *backend_deps],
@@ -167,6 +176,7 @@ if build.target == build.host:
 
     # Hard per-invocation timeout so a hung test cannot wedge the whole CI run.
     test_timeout = ["python3", "$(S)/tests/run_timed.py", "120"]
+    test_inputs = ["$(S)/tests/run_timed.py"]
     test_deps = [plt_unit_tests]
     test_commands = [[*test_timeout, "$(B)/plt_unit_tests"]]
     if system == "Linux":
@@ -193,10 +203,24 @@ if build.target == build.host:
         )
         test_deps.append(plt_wayland_integration_tests)
         test_commands.append([*test_timeout, "$(B)/plt_wayland_integration_tests"])
+        if xcb:
+            plt_x11_integration_tests = program(
+                name="plt_x11_integration_tests",
+                output="$(B)/plt_x11_integration_tests",
+                srcs=["$(S)/tests/test_x11.cpp"],
+                deps=[libplt, libstd, xcb],
+            )
+            test_inputs.append("$(S)/tests/run_x11.py")
+            test_deps.append(plt_x11_integration_tests)
+            test_commands.append([
+                *test_timeout,
+                "python3", "$(S)/tests/run_x11.py",
+                "$(B)/plt_x11_integration_tests",
+            ])
 
     plt_tests = command(
         name="plt_tests",
-        inputs=["$(S)/tests/run_timed.py"],
+        inputs=test_inputs,
         outputs=["$(B)/plt_tests.stamp"],
         deps=test_deps,
         cmd=[

@@ -434,13 +434,20 @@ STD_TEST_SUITE(FiberScheduler) {
 }
 
 namespace {
-    // The system platform: Cocoa on macOS, Wayland on Linux. The Wayland
-    // backend needs a compositor, so without a display these tests skip
-    // rather than fail; the fake-compositor integration suite covers that
-    // path.
+    // The system platform: Cocoa on macOS, Wayland or X11 on Linux. A Linux
+    // backend needs a display server, so without one these tests skip rather
+    // than fail; the backend integration suites cover those paths.
     Platform* systemPlatform(ObjPool& pool) {
 #if !defined(__APPLE__)
-        if (getenv("WAYLAND_DISPLAY") == nullptr) {
+        const char* const waylandDisplay = getenv("WAYLAND_DISPLAY");
+        bool available = waylandDisplay != nullptr && waylandDisplay[0] != 0;
+        const char* const waylandSocket = getenv("WAYLAND_SOCKET");
+        available = available || (waylandSocket != nullptr && waylandSocket[0] != 0);
+    #if defined(HAVE_X11_BACKEND)
+        const char* const x11Display = getenv("DISPLAY");
+        available = available || (x11Display != nullptr && x11Display[0] != 0);
+    #endif
+        if (!available) {
             return nullptr;
         }
 #endif

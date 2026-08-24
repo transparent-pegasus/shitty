@@ -176,6 +176,8 @@ threads = dependency(ldflags=["-pthread"])
 
 vulkan = dependency()
 wayland_backend = dependency()
+x11_backend = dependency()
+have_x11_backend = False
 if linux:
     vulkan = pkg_config("vulkan")
     # Nothing injects these into LDFLAGS outside the Nix shell; the
@@ -183,6 +185,14 @@ if linux:
     wayland_backend = pkg_config("wayland-client", "xkbcommon")
     wayland_backend.ldflags += ["-lrt"]
     build.cppflags += ["-DHAVE_VULKAN_WAYLAND=1"]
+    x11_backend = pkg_config("xcb", required=False, static=True)
+    if x11_backend:
+        have_x11_backend = True
+        build.cppflags += ["-DHAVE_X11_BACKEND=1", "-DHAVE_VULKAN_XCB=1"]
+    else:
+        x11_backend = dependency()
+    if os.environ.get("PLT_X11_TEST_REQUIRED") == "1" and not have_x11_backend:
+        raise RuntimeError("PLT_X11_TEST_REQUIRED=1, but pkg-config could not resolve the XCB backend")
 
 
 embedded_path_flags = [
@@ -253,25 +263,43 @@ if build.target == build.host and os.path.isfile(os.path.join(os.path.dirname(__
             deps=[libstd],
         ),
     ]
+    plt_test_commands = [
+        ["python3", "$(S)/ext/plt/tests/run_timed.py", "120", plt_test_programs[0].output],
+    ]
     if linux:
-        plt_test_programs.append(import_build(
+        wayland_tests = import_build(
             plt_build,
             "plt_wayland_integration_tests",
             extra_cflags=embedded_path_flags,
             extra_cppflags=["-Dno_vendored_std", "-I$(S)/../libstd"],
             deps=[libstd],
-        ))
+        )
+        plt_test_programs.append(wayland_tests)
+        plt_test_commands.append(["python3", "$(S)/ext/plt/tests/run_timed.py", "120", wayland_tests.output])
+    if have_x11_backend:
+        x11_tests = import_build(
+            plt_build,
+            "plt_x11_integration_tests",
+            extra_cflags=embedded_path_flags,
+            extra_cppflags=["-Dno_vendored_std", "-I$(S)/../libstd"],
+            deps=[libstd],
+        )
+        plt_test_programs.append(x11_tests)
+        plt_test_commands.append([
+            "python3", "$(S)/ext/plt/tests/run_timed.py", "120",
+            "python3", "$(S)/ext/plt/tests/run_x11.py", x11_tests.output,
+        ])
     plt_tests = untimed_command(
         name="plt_tests",
-        inputs=["$(S)/ext/plt/tests/run_timed.py"],
+        inputs=[
+            "$(S)/ext/plt/tests/run_timed.py",
+            *(["$(S)/ext/plt/tests/run_x11.py"] if have_x11_backend else []),
+        ],
         outputs=["$(B)/plt-tests.stamp"],
         deps=plt_test_programs,
         cmd=[
             # The same hard per-invocation timeout the nested suite uses.
-            *[
-                ["python3", "$(S)/ext/plt/tests/run_timed.py", "120", program.output]
-                for program in plt_test_programs
-            ],
+            *plt_test_commands,
             [
                 "python3", "-c",
                 "from pathlib import Path; Path(r'$(B)/plt-tests.stamp').touch()",
@@ -714,15 +742,15 @@ libshitty_test_sources = [
     for source in all_libshitty_sources
 ]
 libshitty_deps = [
-    freetype, fontconfig, harfbuzz, darwin_backend, plt, vulkan, wayland_backend, threads, libstd,
+    freetype, fontconfig, harfbuzz, darwin_backend, plt, vulkan, wayland_backend, x11_backend, threads, libstd,
     brotli_common, simdutf,
 ]
 libshitty_test_deps = [
-    freetype, fontconfig, harfbuzz, darwin_backend, plt, vulkan, wayland_backend, threads, libstd,
+    freetype, fontconfig, harfbuzz, darwin_backend, plt, vulkan, wayland_backend, x11_backend, threads, libstd,
     brotli_common, simdutf,
 ]
 libshitty_fuzz_deps = [
-    freetype, fontconfig, harfbuzz, darwin_backend, plt, vulkan, wayland_backend, threads, libstd_external_clock,
+    freetype, fontconfig, harfbuzz, darwin_backend, plt, vulkan, wayland_backend, x11_backend, threads, libstd_external_clock,
     brotli_common, simdutf,
 ]
 

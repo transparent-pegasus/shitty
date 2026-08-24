@@ -42,7 +42,12 @@
 
 #if defined(HAVE_VULKAN_WAYLAND)
     #include <vulkan/vulkan_wayland.h>
-#else
+#endif
+#if defined(HAVE_VULKAN_XCB)
+    #include <xcb/xcb.h>
+    #include <vulkan/vulkan_xcb.h>
+#endif
+#if !defined(HAVE_VULKAN_WAYLAND) && !defined(HAVE_VULKAN_XCB)
     #error No Vulkan window-system backend selected
 #endif
 
@@ -553,8 +558,26 @@ void RendererImpl::createInstance(const plt::RenderContext& context) {
             raiseError(StringView(u8"VK_EXT_headless_surface is unavailable"));
         }
         extensions[extensionCount++] = VK_EXT_HEADLESS_SURFACE_EXTENSION_NAME;
-    } else {
+    } else if (context.backend == plt::RenderBackend::Wayland) {
+#if defined(HAVE_VULKAN_WAYLAND)
+        if (!instanceHasExtension(VK_KHR_WAYLAND_SURFACE_EXTENSION_NAME)) {
+            raiseError(StringView(u8"VK_KHR_wayland_surface is unavailable"));
+        }
         extensions[extensionCount++] = VK_KHR_WAYLAND_SURFACE_EXTENSION_NAME;
+#else
+        raiseError(StringView(u8"Vulkan Wayland support was not built"));
+#endif
+    } else if (context.backend == plt::RenderBackend::X11) {
+#if defined(HAVE_VULKAN_XCB)
+        if (!instanceHasExtension(VK_KHR_XCB_SURFACE_EXTENSION_NAME)) {
+            raiseError(StringView(u8"VK_KHR_xcb_surface is unavailable"));
+        }
+        extensions[extensionCount++] = VK_KHR_XCB_SURFACE_EXTENSION_NAME;
+#else
+        raiseError(StringView(u8"Vulkan X11 support was not built"));
+#endif
+    } else {
+        raiseError(StringView(u8"Vulkan renderer received an unsupported render context"));
     }
     khrSurfaceMaintenance = instanceHasExtension(VK_KHR_SURFACE_MAINTENANCE_1_EXTENSION_NAME);
     extSurfaceMaintenance = instanceHasExtension(VK_EXT_SURFACE_MAINTENANCE_1_EXTENSION_NAME);
@@ -592,14 +615,37 @@ void RendererImpl::createSurface(const plt::RenderContext& context) {
         checkVk(createHeadless(instance, &surfaceInfo, nullptr, &surface), "vkCreateHeadlessSurfaceEXT");
         return;
     }
-    if (context.backend != plt::RenderBackend::Wayland || context.connection == nullptr || context.window == nullptr) {
-        raiseError(StringView(u8"Vulkan renderer requires a Wayland render context"));
+    if (context.backend == plt::RenderBackend::Wayland) {
+#if defined(HAVE_VULKAN_WAYLAND)
+        if (context.connection == nullptr || context.window == nullptr) {
+            raiseError(StringView(u8"Vulkan renderer received an incomplete Wayland render context"));
+        }
+        VkWaylandSurfaceCreateInfoKHR surfaceInfo{};
+        surfaceInfo.sType = VK_STRUCTURE_TYPE_WAYLAND_SURFACE_CREATE_INFO_KHR;
+        surfaceInfo.display = (struct wl_display*)(context.connection);
+        surfaceInfo.surface = (struct wl_surface*)(context.window);
+        checkVk(vkCreateWaylandSurfaceKHR(instance, &surfaceInfo, nullptr, &surface), "vkCreateWaylandSurfaceKHR");
+        return;
+#else
+        raiseError(StringView(u8"Vulkan Wayland support was not built"));
+#endif
     }
-    VkWaylandSurfaceCreateInfoKHR surfaceInfo{};
-    surfaceInfo.sType = VK_STRUCTURE_TYPE_WAYLAND_SURFACE_CREATE_INFO_KHR;
-    surfaceInfo.display = (struct wl_display*)(context.connection);
-    surfaceInfo.surface = (struct wl_surface*)(context.window);
-    checkVk(vkCreateWaylandSurfaceKHR(instance, &surfaceInfo, nullptr, &surface), "vkCreateWaylandSurfaceKHR");
+    if (context.backend == plt::RenderBackend::X11) {
+#if defined(HAVE_VULKAN_XCB)
+        if (context.connection == nullptr || context.window == nullptr) {
+            raiseError(StringView(u8"Vulkan renderer received an incomplete X11 render context"));
+        }
+        VkXcbSurfaceCreateInfoKHR surfaceInfo{};
+        surfaceInfo.sType = VK_STRUCTURE_TYPE_XCB_SURFACE_CREATE_INFO_KHR;
+        surfaceInfo.connection = (xcb_connection_t*)(context.connection);
+        surfaceInfo.window = (xcb_window_t)(uintptr_t)(context.window);
+        checkVk(vkCreateXcbSurfaceKHR(instance, &surfaceInfo, nullptr, &surface), "vkCreateXcbSurfaceKHR");
+        return;
+#else
+        raiseError(StringView(u8"Vulkan X11 support was not built"));
+#endif
+    }
+    raiseError(StringView(u8"Vulkan renderer requires a Wayland or X11 render context"));
 }
 
 void RendererImpl::selectPhysicalDevice() {

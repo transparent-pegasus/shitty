@@ -24,6 +24,8 @@
     freetype
     glslang
     harfbuzz
+    libxau
+    libxdmcp
     libxkbcommon
     ncurses
     perl
@@ -37,11 +39,12 @@
     wayland
     wayland-protocols
     wayland-scanner
+    xorg.libxcb
   ];
 
   shellHook = ''
     # Keep ambient toolchain flags from contaminating this shell.
     unset CPPFLAGS CFLAGS CXXFLAGS LDFLAGS
-    export LDFLAGS="$(pkg-config --libs wayland-client xkbcommon) -lrt"
+    export LDFLAGS="$(pkg-config --libs wayland-client xkbcommon xcb) -lrt"
   '';
 }

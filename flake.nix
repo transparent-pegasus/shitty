@@ -2,7 +2,7 @@
 # MIT licensed
 # See the file LICENSE.MIT for the full license.
 {
-  description = "A small, fast Wayland/Vulkan and macOS/Metal terminal emulator";
+  description = "A small, fast Wayland/X11/Vulkan and macOS/Metal terminal emulator";
 
   inputs = {
     nixpkgs.url = "github:NixOS/nixpkgs/nixos-unstable";
@@ -89,7 +89,7 @@
           ''}
           export LDFLAGS="${
             lib.optionalString (linkInstrumentation != "") "${linkInstrumentation} "
-          }${lib.optionalString isLinux "$(pkg-config --libs wayland-client xkbcommon) -lrt"}"
+          }${lib.optionalString isLinux "$(pkg-config --libs wayland-client xkbcommon xcb) -lrt"}"
         '';
 
       mkShitty =
@@ -143,10 +143,13 @@
               simdutf
             ]
             ++ lib.optionals stdenv.hostPlatform.isLinux [
+              libxau
+              libxdmcp
               libxkbcommon
               vulkan-headers
               vulkan-loader
               wayland
+              xorg.libxcb
             ];
 
           # The project's runner honours the usual toolchain env vars. Keep the
@@ -184,7 +187,7 @@
           '';
 
           meta = {
-            description = "Small, fast terminal emulator with Wayland/Vulkan and macOS/Metal frontends";
+            description = "Small, fast terminal emulator with Wayland/X11/Vulkan and macOS/Metal frontends";
             homepage = "https://github.com/pg83/shitty";
             license = with lib.licenses; [
               gpl3Plus
@@ -491,7 +494,7 @@
             unset CPPFLAGS CFLAGS CXXFLAGS LDFLAGS
             NIX_LDFLAGS="''${NIX_LDFLAGS#"-rpath $out/lib "}"
             export NIX_LDFLAGS
-            export LDFLAGS="$(pkg-config --libs wayland-client xkbcommon) -lrt"
+            export LDFLAGS="$(pkg-config --libs wayland-client xkbcommon xcb) -lrt"
             echo "shitty dev shell — run: ./build && ./st"
           '';
         };

@@ -73,8 +73,8 @@ equalized setup from inside every terminal before measuring anything.
 
 ## Features
 
-- Native macOS and Linux/Wayland frontends, with Metal and Vulkan compute
-  rendering, HiDPI support, and true Wayland fractional scaling.
+- Native macOS, Linux/Wayland, and Linux/X11 frontends, with Metal and Vulkan
+  compute rendering, HiDPI support, and true fractional scaling on Wayland.
 - VT52 through VT5xx and ECMA-48 controls, ISO-2022 character sets, and the
   widely used xterm extensions.
 - Primary and alternate screens, configurable primary-screen scrollback,
@@ -108,7 +108,7 @@ equalized setup from inside every terminal before measuring anything.
 - X10, VT200, button-event, any-event, UTF-8, SGR, SGR-pixel, urxvt, and DEC
   locator mouse protocols, plus alternate-screen wheel-to-cursor mode.
 - Native Cocoa and Wayland `text-input-v3` IME composition, including visible
-  preedit text and cursor ranges.
+  preedit text and cursor ranges; X11 supports locale-aware XKB Compose input.
 - Character, word, line, and rectangular mouse selection; drag autoscroll;
   primary selection; system clipboard; bracketed paste; and optional
   automatic primary-to-clipboard copying.
@@ -126,8 +126,8 @@ equalized setup from inside every terminal before measuring anything.
 - `XTVERSION`, `XTGETTCAP`, primary/secondary/tertiary device attributes,
   DECRQSS state reports, iTerm2 capability reporting, and `TERM_FEATURES` for
   feature discovery without terminal-name guessing.
-- Native file/URI and text drag-and-drop into the terminal on macOS and
-  Wayland.
+- Native file/URI and text drag-and-drop into the terminal on macOS, Wayland,
+  and X11.
 - A TOML configuration with imports, environment expansion, CLI overrides,
   colour schemes, fallback lists, and atomic `SIGUSR1` runtime reload; invalid
   reloads leave the current configuration active.
@@ -163,8 +163,10 @@ The exact `libstd` revision used by Shitty is bundled in
 `ext/libstd` and built as part of the same graph.
 
 Linux additionally requires FreeType, HarfBuzz, Wayland client headers,
-xkbcommon, `wayland-scanner`, and Vulkan headers and loader. macOS requires
-SPIRV-Cross and uses CoreText, Cocoa, Metal, and IOSurface from the system SDK.
+`xkbcommon`, `wayland-scanner`, and Vulkan headers and loader. The X11 backend
+is built when the optional `xcb` headers and library are available. macOS
+requires SPIRV-Cross and uses CoreText, Cocoa, Metal, and IOSurface from the
+system SDK.
 
 liburing and xxhash are optional and need no configuration: `libstd`
 detects their headers and the build links whatever they turn on, giving
@@ -178,10 +180,30 @@ implementation. Font families are resolved by
 CoreText on macOS and by Fontconfig (optional) on Linux; explicit font
 file paths work everywhere, whichever backend rasterizes them.
 
-Linux requires a working Vulkan driver and Wayland compositor at runtime.
-macOS uses the native Metal driver. The native window and event-loop layer is
-built from `ext/plt`; the terminal does not depend on a generic
-windowing toolkit.
+Linux requires a working Vulkan driver and either a Wayland compositor or X11
+server at runtime. Backend selection is deterministic: a non-empty
+`WAYLAND_DISPLAY` or inherited `WAYLAND_SOCKET` selects Wayland and wins when
+X11 variables are also present; otherwise a non-empty `DISPLAY` selects X11.
+Startup fails with a direct explanation when none is set. A connection failure
+from the chosen server is reported as-is rather than silently opening on the
+other backend, so stale display variables remain visible. A binary built
+without the optional XCB backend reports that X11 support is unavailable when
+only `DISPLAY` is set. To force X11 from a Wayland session, unset the Wayland
+variables for that process:
+
+```sh
+env -u WAYLAND_DISPLAY -u WAYLAND_SOCKET ./st
+```
+
+Wayland provides fractional per-monitor scaling, `text-input-v3` preedit, and
+smooth scroll phases. X11 reads startup DPI from `Xft.dpi` and supports the
+server's named XKB layout, locale Compose sequences, primary/clipboard
+selections, and XDND; it does not yet mirror runtime `xmodmap` remaps, provide
+XIM preedit, live per-monitor DPI changes, or XInput2 smooth-scroll phases, and
+does not decode the configured PNG application icon into `_NET_WM_ICON`. macOS
+uses the native Metal driver. The native
+window and event-loop layer is built from `ext/plt`; the terminal does not
+depend on a generic windowing toolkit.
 
 The complete imported conformance suite additionally needs ncurses, Perl,
 and vttest.

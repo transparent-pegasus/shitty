@@ -12,7 +12,8 @@ namespace plt {
     enum class RenderBackend : u8 {
         Wayland,
         Cocoa,
-        Headless
+        Headless,
+        X11
     };
 
     struct RenderContext {
@@ -104,14 +105,15 @@ namespace plt {
         // Null leaves the window rejecting every drag.
         DropTarget* drop = nullptr;
         // Encoded image bytes (PNG) for the application icon; empty keeps
-        // the platform default. Cocoa sets the Dock icon from it, Wayland
-        // has no icon protocol and ignores it.
+        // the platform default. Cocoa sets the Dock icon from it; Wayland has
+        // no icon protocol, and the X11 backend does not decode PNG data.
         stl::StringView icon = {};
         // The human-visible application name. Cocoa pushes it to Launch
         // Services so the menu bar of an unbundled binary shows it
-        // instead of argv[0]; Wayland ignores it (appId serves the
-        // shell). The Cmd-Tab switcher is beyond reach: its label comes
-        // from the application bundle, which a bare executable lacks.
+        // instead of argv[0]; X11 uses it as the WM_CLASS class, while
+        // Wayland ignores it (appId serves the shell). The Cmd-Tab switcher
+        // is beyond reach: its label comes from the application bundle, which
+        // a bare executable lacks.
         stl::StringView appName = {};
     };
 

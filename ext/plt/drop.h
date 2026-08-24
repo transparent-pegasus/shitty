@@ -31,9 +31,10 @@ namespace plt {
 
     // A settled drop. At most one read(); the mime must be one of the
     // offered formats. The returned stream is owned by the caller — plain
-    // delete releases it — and pulls the payload on the calling fiber.
-    // Deleting it before end of stream abandons the transfer; starting no
-    // read before dropped() returns rejects the drop.
+    // delete releases it — and pulls the payload on the calling fiber. It
+    // must be consumed and deleted before dropped() returns. Deleting it
+    // before end of stream abandons the transfer; starting no read rejects
+    // the drop.
     struct Drop {
         virtual DropOffer* what() = 0;
         virtual stl::Input* read(stl::StringView mime) = 0;
