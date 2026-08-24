@@ -26,6 +26,7 @@ runtime="$logs/xdg-runtime"
 display_file="$logs/xvfb-display"
 weston_log="$logs/weston.log"
 vulkan_log="$logs/vulkan-wayland.log"
+vulkan_x11_log="$logs/vulkan-x11.log"
 
 export XDG_RUNTIME_DIR="$runtime"
 export WAYLAND_DISPLAY=wayland-shitty-test
@@ -34,6 +35,7 @@ export DL_STUB_DEBUG="$logs/dlfcn.log"
 
 test -n "$VK_DRIVER_FILES"
 install -d -m 700 "$runtime"
+: > "$DL_STUB_DEBUG"
 
 xvfb_pid=
 weston_pid=
@@ -101,3 +103,20 @@ grep -q '^Vulkan presentation:' "$vulkan_log"
 grep -Eq 'wl_surface[#@][0-9]+\.attach\(wl_buffer[#@][0-9]+' "$vulkan_log"
 grep -q 'try open handle libwayland-client.so.0' "$DL_STUB_DEBUG"
 grep -q 'found handle wayland-client' "$DL_STUB_DEBUG"
+
+unset WAYLAND_DISPLAY WAYLAND_SOCKET
+if ! timeout --signal=TERM --kill-after=5s 30s "$artifacts/st" \
+    -vulkanInfo \
+    -geometry 20x5 \
+    -e /bin/sh -c 'printf "Vulkan X11 smoke\n"; sleep 2' \
+    >"$vulkan_x11_log" 2>&1; then
+    cat "$vulkan_x11_log"
+    exit 1
+fi
+cat "$vulkan_x11_log"
+
+grep -q '^Vulkan device: llvmpipe' "$vulkan_x11_log"
+grep -q '^Vulkan presentation:' "$vulkan_x11_log"
+grep -q '^try open handle libxcb.so.1$' "$DL_STUB_DEBUG"
+grep -q '^found handle xcb$' "$DL_STUB_DEBUG"
+grep -q '^found handle xcb-present$' "$DL_STUB_DEBUG"

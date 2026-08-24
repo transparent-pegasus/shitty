@@ -37,7 +37,7 @@ jobs:
           sudo apt-get install --no-install-recommends -y \
             autopoint binutils bison bzip2 ca-certificates clang cmake curl file flex gettext \
             git glslang-tools gperf gzip libclang-rt-dev librsvg2-bin \
-            lld llvm m4 make meson ninja-build perl pkg-config python3 ragel rsync xz-utils
+            lld llvm m4 make meson ninja-build perl pkg-config python3 ragel rsync texinfo xz-utils
 
       - name: Enable unprivileged user namespaces
         run: sudo sysctl -w kernel.apparmor_restrict_unprivileged_userns=0
@@ -45,6 +45,7 @@ jobs:
       - name: Build Linux binaries through IX
         env:
           IX_FLAGS: all_system=1,intl_ver=no,system_aclocal_path=/usr/share/aclocal
+          IX_PATH: "${{ github.workspace }}/dev/ix/pkgs:{builtin}"
           IX_ROOT: ${{ runner.temp }}/ix
           IX_THREADS: 4
         run: |
@@ -66,6 +67,8 @@ jobs:
             lib/wayland \
             lib/wayland/dl \
             lib/xkb/common \
+            lib/xcb \
+            lib/xcb/dl \
             lib/vulkan/loader \
             lib/vulkan/headers \
             bld/wayland \
@@ -138,6 +141,7 @@ jobs:
           path: |
             ${{ runner.temp }}/dlfcn.log
             ${{ runner.temp }}/vulkan-wayland.log
+            ${{ runner.temp }}/vulkan-x11.log
             ${{ runner.temp }}/weston.log
           if-no-files-found: ignore
           retention-days: 7
@@ -177,6 +181,7 @@ jobs:
           path: |
             ${{ runner.temp }}/dlfcn.log
             ${{ runner.temp }}/vulkan-wayland.log
+            ${{ runner.temp }}/vulkan-x11.log
             ${{ runner.temp }}/weston.log
           if-no-files-found: ignore
           retention-days: 7
@@ -214,6 +219,7 @@ jobs:
           path: |
             ${{ runner.temp }}/dlfcn.log
             ${{ runner.temp }}/vulkan-wayland.log
+            ${{ runner.temp }}/vulkan-x11.log
             ${{ runner.temp }}/weston.log
           if-no-files-found: ignore
           retention-days: 7
