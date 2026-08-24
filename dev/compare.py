@@ -6,11 +6,11 @@
 """Throughput shootout against alacritty, kitty and ghostty.
 
 Every terminal cats the same payloads through its GUI with the setup
-equalized first: Menlo 12pt, an 80x24 grid and the same cell box in
-pixels, scrollback of 500 lines. Each configuration is verified inside
-the terminal through TIOCGWINSZ before anything is measured; shitty's
--geometry is calibrated automatically because the window manager may
-not honour the requested grid exactly.
+equalized first: the same 12pt monospace face, an 80x24 grid and the same
+cell box in pixels, scrollback of 500 lines. Each configuration is verified
+inside the terminal through TIOCGWINSZ before anything is measured; shitty's
+-geometry is calibrated automatically because the window manager may not
+honour the requested grid exactly.
 
 Payloads: 1GB of printable ASCII with newlines (the scroll path) and
 100MB of seeded pseudo-random bytes (the invalid-UTF-8 parser path).
@@ -23,7 +23,7 @@ Usage:
 
 import argparse
 import random
-import re
+import resource
 import subprocess
 import sys
 import time
@@ -31,8 +31,15 @@ from pathlib import Path
 
 COLUMNS = 80
 ROWS = 24
-FONT = "Menlo"
+# Keep the published macOS comparison on Menlo.  Linux installations do not
+# generally have it; asking for the missing face makes the terminals choose
+# different fallbacks even though they received the same family name.
+FONT = "Menlo" if sys.platform == "darwin" else "monospace"
 FONT_SIZE = 12
+# CoreText consumes point sizes while shitty's FreeType backend consumes
+# physical pixels.  Alacritty's point sizes use the conventional 96/72
+# conversion, so 12pt and 16px describe the same Linux raster size.
+SHITTY_FONT_SIZE = FONT_SIZE if sys.platform == "darwin" else round(FONT_SIZE * 96 / 72)
 SCROLLBACK_LINES = 500
 # A gigabyte of ASCII, so the app startup (~0.15s) reads as noise, not
 # as a quarter of the wall time. The random payload is CPU-bound at a
@@ -74,7 +81,7 @@ class Shitty(Terminal):
         return [
             self.executable,
             "-font", FONT,
-            "-fontsize", str(FONT_SIZE),
+            "-fontsize", str(SHITTY_FONT_SIZE),
             "-geometry", self.geometry,
             "-e", "sh", "-c", command,
         ]
@@ -167,6 +174,7 @@ def run(argv):
         stderr=subprocess.PIPE,
         timeout=RUN_TIMEOUT,
         text=True,
+        check=False,
     )
 
 
@@ -228,18 +236,23 @@ def bench(terminal, payload, runs):
     """Best wall and its user time over the runs, in seconds."""
     best = None
     for _ in range(runs):
-        argv = ["/usr/bin/time", "-p", *terminal.argv(f"cat {payload}")]
+        before = resource.getrusage(resource.RUSAGE_CHILDREN)
+        started = time.perf_counter()
         try:
-            timing = run(argv).stderr
+            run(terminal.argv(f"cat {payload}"))
         except subprocess.TimeoutExpired:
-            subprocess.run(["pkill", "-9", "-x", Path(terminal.executable).name])
+            subprocess.run(
+                ["pkill", "-9", "-x", Path(terminal.executable).name],
+                check=False,
+            )
             return None
-        measured = dict(
-            (key, float(value))
-            for key, value in re.findall(r"^(real|user|sys) +([0-9.]+)", timing, re.M)
-        )
-        if "real" not in measured:
-            return None
+        elapsed = time.perf_counter() - started
+        after = resource.getrusage(resource.RUSAGE_CHILDREN)
+        measured = {
+            "real": elapsed,
+            "user": after.ru_utime - before.ru_utime,
+            "sys": after.ru_stime - before.ru_stime,
+        }
         if best is None or measured["real"] < best["real"]:
             best = measured
         time.sleep(0.3)
@@ -274,7 +287,7 @@ def main():
 
     cells = {terminal.cell for terminal in ready}
     for terminal in ready:
-        cell = "%.1fx%.1f" % terminal.cell
+        cell = f"{terminal.cell[0]:.1f}x{terminal.cell[1]:.1f}"
         print(f"{terminal.name}: grid {COLUMNS}x{ROWS}, cell {cell}px")
     if len(cells) != 1:
         print("warning: cell sizes differ, the comparison is not apples to apples")
