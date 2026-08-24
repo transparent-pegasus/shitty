@@ -77,13 +77,14 @@ jobs:
             bash gcc g++ musl-dev linux-headers make python3 zstd perl perl-doc pkgconf \
             diffutils procps ragel glslang rsvg-convert ncurses-dev \
             brotli-dev fontconfig-dev freetype-dev harfbuzz-dev simdutf-dev \
-            libxkbcommon-dev wayland-dev wayland-protocols \
-            vulkan-headers vulkan-loader-dev mesa-vulkan-swrast
+            libxcb-dev libxkbcommon-dev wayland-dev wayland-protocols \
+            vulkan-headers vulkan-loader-dev mesa-vulkan-swrast xvfb
 
       - name: Run full test suite with GCC and musl
         env:
           CC: gcc
           CXX: g++
+          PLT_X11_TEST_REQUIRED: "1"
           SHITTY_TEST_VULKAN_REQUIRED: "1"
         run: |
           set -o pipefail
@@ -132,9 +133,9 @@ jobs:
                 gcc-c++ make git python3 perl pkgconf-pkg-config diffutils procps-ng \
                 ragel glslang librsvg2-tools ncurses-devel \
                 freetype-devel fontconfig-devel harfbuzz-devel \
-                libxkbcommon-devel \
+                libxcb-devel libxkbcommon-devel \
                 vulkan-headers vulkan-loader-devel mesa-vulkan-drivers \
-                wayland-devel wayland-protocols-devel; then
+                wayland-devel wayland-protocols-devel xorg-x11-server-Xvfb; then
               exit 0
             fi
             echo "dnf install failed (attempt $attempt); cleaning and retrying" >&2
@@ -148,9 +149,75 @@ jobs:
         env:
           CC: gcc
           CXX: g++
+          PLT_X11_TEST_REQUIRED: "1"
         run: |
           set -o pipefail
           ./build test 2>&1 | tee "$RUNNER_TEMP/tests-fedora.log"
+
+      - name: Smoke-test X11 with Vulkan lavapipe
+        env:
+          CC: gcc
+          CXX: g++
+        run: |
+          set -eu
+          set -o pipefail
+
+          ./build st 2>&1 | tee "$RUNNER_TEMP/x11-build.log"
+
+          export VK_DRIVER_FILES="$(find /usr/share/vulkan/icd.d -name 'lvp_icd*.json' -print -quit)"
+          export VK_ICD_FILENAMES="$VK_DRIVER_FILES"
+          test -n "$VK_DRIVER_FILES"
+
+          display_file="$RUNNER_TEMP/xvfb-display"
+          xvfb_log="$RUNNER_TEMP/xvfb.log"
+          x11_log="$RUNNER_TEMP/x11-smoke.log"
+          xvfb_pid=
+          cleanup() {
+            if test -n "$xvfb_pid"; then
+              kill "$xvfb_pid" 2>/dev/null || true
+              wait "$xvfb_pid" 2>/dev/null || true
+            fi
+          }
+          trap cleanup EXIT
+
+          Xvfb \
+            -displayfd 3 \
+            -screen 0 1024x768x24 \
+            -nolisten tcp \
+            >"$xvfb_log" 2>&1 \
+            3>"$display_file" &
+          xvfb_pid=$!
+
+          attempt=0
+          while test "$attempt" -lt 100 && ! test -s "$display_file"; do
+            if ! kill -0 "$xvfb_pid" 2>/dev/null; then
+              cat "$xvfb_log"
+              exit 1
+            fi
+            sleep 0.1
+            attempt=$((attempt + 1))
+          done
+          if ! test -s "$display_file"; then
+            cat "$xvfb_log"
+            exit 1
+          fi
+
+          export DISPLAY=":$(cat "$display_file")"
+          unset WAYLAND_DISPLAY WAYLAND_SOCKET
+
+          if ! timeout --signal=TERM --kill-after=5s 30s ./st \
+              -vulkanInfo \
+              -geometry 20x5 \
+              -e /bin/sh -c 'printf "Vulkan X11 smoke\n"; sleep 2' \
+              >"$x11_log" 2>&1; then
+            cat "$x11_log"
+            cat "$xvfb_log"
+            exit 1
+          fi
+          cat "$x11_log"
+
+          grep -q '^Vulkan device: llvmpipe' "$x11_log"
+          grep -q '^Vulkan presentation:' "$x11_log"
 
       - name: Summarize failure
         if: failure()
@@ -165,7 +232,11 @@ jobs:
         uses: actions/upload-artifact@043fb46d1a93c77aae656e7c1c64a875d1fc6a0a # v7.0.1
         with:
           name: tests-fedora-log
-          path: ${{ runner.temp }}/tests-fedora.log
+          path: |
+            ${{ runner.temp }}/tests-fedora.log
+            ${{ runner.temp }}/x11-build.log
+            ${{ runner.temp }}/x11-smoke.log
+            ${{ runner.temp }}/xvfb.log
           if-no-files-found: ignore
           retention-days: 7
           compression-level: 9
