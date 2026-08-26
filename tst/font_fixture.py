@@ -10,6 +10,7 @@ import struct
 FONT_ROOT = Path(__file__).resolve().parents[1] / "ext" / "fonts"
 COLOR_EMOJI_FONT = FONT_ROOT / "NotoColorEmoji.ttf"
 NERD_FONT = FONT_ROOT / "JetBrainsMonoNerdFont-Regular.ttf"
+AMIRI_FONT = FONT_ROOT / "Amiri-Regular.ttf"
 
 
 def _align4(value):

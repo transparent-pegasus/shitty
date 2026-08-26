@@ -7,15 +7,16 @@
 #include "startup.h"
 
 #include "brand.h"
-#include "fatal.h"
-#include "term_features.h"
 
+#include <lib/vterm/fatal.h>
+#include <lib/vterm/term_features.h>
+
+#include <pwd.h>
+#include <limits.h>
 #include <stdlib.h>
 #include <string.h>
-#include <limits.h>
-#include <pwd.h>
-#include <sys/stat.h>
 #include <unistd.h>
+#include <sys/stat.h>
 
 using namespace stl;
 

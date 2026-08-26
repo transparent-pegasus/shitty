@@ -4,13 +4,13 @@
  * See the file LICENSE.MIT for the full license.
  */
 
-#include "cell_extra_store.h"
-
 #include "composer.h"
-#include "listener.h"
 
-#include <std/mem/obj_pool.h>
+#include <lib/vterm/listener.h>
+#include <lib/vterm/cell_extra_store.h>
+
 #include <std/tst/ut.h>
+#include <std/mem/obj_pool.h>
 
 #include <cstring>
 
@@ -32,8 +32,8 @@ namespace {
     }
 
     static CellExtraStore* createStore(Composer& composer, size_t cellCount) {
-        CellExtraStore* const store = CellExtraStore::create(composer, cellCount);
-        composer.setCellExtras(store);
+        CellExtraStore* const store = CellExtraStore::create(composer.extras, *composer.pool, cellCount);
+        composer.extras.replace(store);
         return store;
     }
 }
@@ -44,7 +44,7 @@ ExtraChangeListener::ExtraChangeListener(Composer& composer_)
 }
 
 void ExtraChangeListener::onListen(void*) {
-    observed = composer.cellExtras;
+    observed = composer.extras.store;
     ++calls;
 }
 
@@ -52,11 +52,11 @@ STD_TEST_SUITE(CellExtraStore) {
     STD_TEST(FactoryDoesNotReplaceComposerStore) {
         auto pool = ObjPool::fromMemory();
         Composer& composer = *pool->make<Composer>(pool.mutPtr());
-        CellExtraStore* const original = composer.cellExtras;
-        CellExtraStore* const store = CellExtraStore::create(composer, 1);
+        CellExtraStore* const original = composer.extras.store;
+        CellExtraStore* const store = CellExtraStore::create(composer.extras, *composer.pool, 1);
 
         STD_INSIST(store != nullptr);
-        STD_INSIST(composer.cellExtras == original);
+        STD_INSIST(composer.extras.store == original);
     }
 
     STD_TEST(KeepsInlineUnderlineColorWithoutExtra) {
@@ -127,7 +127,7 @@ STD_TEST_SUITE(CellExtraStore) {
         auto pool = ObjPool::fromMemory();
         Composer& composer = *pool->make<Composer>(pool.mutPtr());
         ExtraChangeListener listener(composer);
-        composer.cellExtrasChangedListeners.pushBack(&listener);
+        composer.extras.changedListeners.pushBack(&listener);
         CellExtraStore* store = createStore(composer, 2);
         TerminalCell cell{};
         const u32 grapheme[] = {0x1f469, 0x200d, 0x1f4bb};
@@ -140,7 +140,7 @@ STD_TEST_SUITE(CellExtraStore) {
         const size_t notificationsBefore = listener.calls;
 
         store->collect(cells, nullptr, 0);
-        store = composer.cellExtras;
+        store = composer.extras.store;
 
         STD_INSIST(store != previous);
         STD_INSIST(listener.calls == notificationsBefore + 1);
@@ -165,7 +165,7 @@ STD_TEST_SUITE(CellExtraStore) {
         cells.pushBack(&cell);
 
         store->collect(cells, nullptr, 0);
-        store = composer.cellExtras;
+        store = composer.extras.store;
 
         STD_INSIST(store->hyperlinkCount() == 1);
         STD_INSIST(store->findHyperlink(StringView(u8"live")) != 0);
@@ -202,7 +202,7 @@ STD_TEST_SUITE(CellExtraStore) {
         Vector<TerminalCell*> cells;
 
         store->collect(cells, roots, 1);
-        store = composer.cellExtras;
+        store = composer.extras.store;
 
         TerminalCell cell{};
         store->setHyperlink(cell, root);
@@ -303,7 +303,7 @@ STD_TEST_SUITE(CellExtraStore) {
         cells.pushBack(&second);
 
         store->collect(cells, nullptr, 0);
-        store = composer.cellExtras;
+        store = composer.extras.store;
 
         const CellExtraView firstView = store->view(first);
         const CellExtraView secondView = store->view(second);

@@ -7,7 +7,7 @@
 #include "input_bindings.h"
 
 #include "composer.h"
-#include "listener.h"
+#include <lib/vterm/listener.h>
 #include "options.h"
 
 #include <std/dbg/assert.h>

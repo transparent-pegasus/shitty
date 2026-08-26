@@ -18,7 +18,12 @@ unit_sources = [source for source in std_sources if source.endswith("_ut.cpp")]
 library_sources = [source for source in std_sources if not source.endswith("_ut.cpp")]
 
 external_monotonic_clock = "-DSTL_EXTERNAL_MONOTONIC_NOW_US=1" in build.cppflags
-libstd_name = "libstd_external_clock" if external_monotonic_clock else "libstd"
+position_independent = "-fPIC" in build.cflags
+libstd_name = (
+    "libstd_external_clock" if external_monotonic_clock
+    else "libstd_pic" if position_independent
+    else "libstd"
+)
 
 libstd = library(
     name=libstd_name,

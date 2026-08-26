@@ -6,11 +6,12 @@
 
 #include "input_router.h"
 
-#include "composer.h"
-#include "input_handler.h"
-#include "input_remap.h"
 #include "session.h"
-#include "vterm.h"
+#include "composer.h"
+#include "input_remap.h"
+
+#include <lib/vterm/vterm.h>
+#include <lib/vterm/input_handler.h>
 
 #include <std/mem/obj_pool.h>
 

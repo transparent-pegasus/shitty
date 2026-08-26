@@ -15,7 +15,7 @@
  * invalid document breaks off.
  */
 
-#include "num.h"
+#include <lib/vterm/num.h>
 #include "toml.h"
 
 #include <std/lib/buffer.h>

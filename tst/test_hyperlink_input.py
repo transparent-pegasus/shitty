@@ -8,7 +8,9 @@ from harness import Shitty
 
 
 CONTROL = 2
+SUPER = 8
 LEFT_CONTROL = 341
+LEFT_SUPER = 343
 PRESS = 1
 RELEASE = 0
 
@@ -78,6 +80,31 @@ class HyperlinkInputTest(unittest.TestCase):
                 modifiers=0,
             )
             self.assertEqual(terminal.desktop_state()["icon"], 0)
+
+    def test_super_arms_the_hover_and_the_click_like_control(self):
+        # Super is a hyperlink modifier everywhere Control is: on macOS
+        # Command maps to it, and Command+click is the platform's link
+        # convention.
+        with Shitty(columns=8, rows=2) as terminal:
+            terminal.write(
+                b"\x1b[?25l"
+                b"\x1b]8;id=one;https://one.test\x1b\\ab\x1b]8;;\x1b\\"
+            )
+            terminal.pointer(2, 2)
+            self.assertEqual(terminal.desktop_state()["icon"], 0)
+
+            terminal.frontend_key_event(LEFT_SUPER, PRESS, modifiers=SUPER)
+            state = terminal.desktop_state()
+            self.assertEqual(state["icon"], 1)
+            self.assertNotEqual(state["hovered_hyperlink"], 0)
+            terminal.frontend_key_event(LEFT_SUPER, RELEASE, modifiers=0)
+            self.assertEqual(terminal.desktop_state()["icon"], 0)
+
+            terminal.button(0, True, x=2, y=2, modifiers=SUPER)
+            terminal.button(0, False, x=2, y=2, modifiers=SUPER)
+            state = terminal.desktop_state()
+            self.assertEqual(state["open_count"], 1)
+            self.assertEqual(state["opened_uri"], b"https://one.test")
 
     def test_hover_marks_the_complete_current_occurrence(self):
         with Shitty(columns=6, rows=1) as terminal:

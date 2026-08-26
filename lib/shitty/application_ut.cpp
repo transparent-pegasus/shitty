@@ -4,23 +4,21 @@
  * See the file LICENSE.MIT for the full license.
  */
 
+#include "session.h"
+#include "composer.h"
 #include "application.h"
 
-#include "composer.h"
-#include "session.h"
-
-#include <plt/input.h>
-#include <plt/platform.h>
-#include <plt/platform_headless.h>
-#include <plt/poller.h>
-#include <plt/poller_loop.h>
-#include <plt/window.h>
-
-#include <std/mem/obj_pool.h>
-#include <std/str/view.h>
 #include <std/tst/ut.h>
+#include <std/str/view.h>
+#include <std/mem/obj_pool.h>
 
 #include <signal.h>
+#include <plt/input.h>
+#include <plt/poller.h>
+#include <plt/window.h>
+#include <plt/platform.h>
+#include <plt/poller_loop.h>
+#include <plt/platform_headless.h>
 
 using namespace stl;
 

@@ -4,30 +4,30 @@
  * See the file LICENSE.MIT for the full license.
  */
 
-#include "composer.h"
-#include "listener.h"
 #include "pty.h"
 #include "session.h"
 #include "startup.h"
-#include "vterm_headless.h"
+#include "composer.h"
 
-#include <plt/fiber.h>
-#include <plt/loop_wake.h>
-#include <plt/platform.h>
-#include <plt/poller_loop.h>
+#include <lib/vterm/listener.h>
+#include <lib/vterm/vt_headless.h>
 
-#include <std/ios/output.h>
+#include <std/tst/ut.h>
 #include <std/ios/input.h>
+#include <std/ios/output.h>
+#include <std/thr/runable.h>
 #include <std/mem/obj_pool.h>
 #include <std/mem/small_obj_allocator.h>
-#include <std/thr/runable.h>
-#include <std/tst/ut.h>
 
+#include <string>
 #include <signal.h>
 #include <stdlib.h>
-#include <string>
-#include <sys/wait.h>
 #include <unistd.h>
+#include <sys/wait.h>
+#include <plt/fiber.h>
+#include <plt/platform.h>
+#include <plt/loop_wake.h>
+#include <plt/poller_loop.h>
 
 using namespace stl;
 
@@ -103,7 +103,7 @@ namespace {
 
         Chunk* acquire() override {
             for (;;) {
-                composer.platform->scheduler()->current()->park();
+                composer.scheduler->current()->park();
             }
         }
 
@@ -247,8 +247,12 @@ STD_TEST_SUITE(Pty) {
     STD_TEST(EofClosesOneSessionBeforeItsFollowupWake) {
         ObjPool::Ref pool = ObjPool::fromMemory();
         Composer& composer = *pool->make<Composer>(pool.mutPtr());
-        VtermHeadless* const host = VtermHeadless::create(composer, nullptr);
-        (void)(host);
+        VtermHeadless* const host = VtermHeadless::create(*composer.pool, *composer.vtConfig.config, nullptr);
+        composer.platform = host->platform();
+        composer.window = host->window();
+        composer.installVtHost();
+        composer.geometry.setCellPixelSize(1, 1);
+        composer.geometry.resize(80, 24, composer.host);
 
         char program[] = "pty_ut";
         char execute[] = "-e";
@@ -413,9 +417,13 @@ STD_TEST_SUITE(Pty) {
         // platform, scheduler and arena follow the production lifetime too.
         ObjPool* const pool = ObjPool::fromMemoryRaw();
         Composer& composer = *pool->make<Composer>(pool);
-        VtermHeadless* const host = VtermHeadless::create(composer, nullptr);
-        (void)(host);
-        Pty* const pty = createPty(*composer.pool, *composer.platform->scheduler(), composer.platform);
+        VtermHeadless* const host = VtermHeadless::create(*composer.pool, *composer.vtConfig.config, nullptr);
+        composer.platform = host->platform();
+        composer.window = host->window();
+        composer.installVtHost();
+        composer.geometry.setCellPixelSize(1, 1);
+        composer.geometry.resize(80, 24, composer.host);
+        Pty* const pty = createPty(*composer.pool, *composer.scheduler, host->platform());
         ObjPool* const owner = ObjPool::fromMemoryRaw();
         char mode[] = "flood-hangup";
         PtyHandle* const handle = spawnHelper(*pty, *owner, mode);
@@ -472,10 +480,16 @@ STD_TEST_SUITE(Pty) {
         fixture.scheduler->create(*owner, reader);
         STD_INSIST(!readerReturned);
 
-        std::string input(1024 * 1024, 'x');
+        // The child never reads, so an unbounded stream must park the
+        // writer once the kernel buffering fills - whatever that amounts
+        // to on the host: caller-stack create() only returns once the
+        // fiber parks, no size calibration involved.
+        std::string input(64 * 1024, 'x');
         bool writerReturned = false;
         auto writer = makeRunable([&] {
-            sendAll(*handle, input.data(), input.size());
+            for (;;) {
+                sendAll(*handle, input.data(), input.size());
+            }
             writerReturned = true;
         });
         fixture.scheduler->create(*owner, writer, 64 * 1024);

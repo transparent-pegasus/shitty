@@ -3,7 +3,6 @@
  * MIT licensed
  * See the file LICENSE.MIT for the full license.
  */
-
 /* part of this file is part of Zutty.
  * Copyright (C) 2020 Tom Szilagyi
  *
@@ -17,12 +16,12 @@
 
 #pragma once
 
-#include "ansi_palette.h"
-#include "unicode_width.h"
+#include <lib/vterm/vt_config.h>
+#include <lib/vterm/ansi_palette.h>
 
-#include <std/lib/vector.h>
 #include <std/str/view.h>
 #include <std/sys/types.h>
+#include <std/lib/vector.h>
 
 namespace stl {
     class ObjPool;
@@ -47,44 +46,36 @@ enum class OptionsLoad {
 // terminated, so a view's data() doubles as a C string for the libc
 // calls that need one.
 struct Options {
+    // The semantic knobs of the VT core live in the embedded VtConfig;
+    // everything else here is the interactive shell around it.
+    VtConfig vt;
     u8 fontsize = 0;
     // -1: classic hinted grid rendering. 0..100: unhinted rendering with
     // subpixel glyph placement, the value scaling the stem darkening.
     i8 soft = -1;
-    u8 modifyOtherKeys = 0;
     u16 border = 0;
     u16 nCols = 0;
     u16 nRows = 0;
-    u16 saveLines = 0;
-    // The width emulation resolved from -unicodeWidths; parsing probes
-    // the system libc when the option asks to match it.
-    UnicodeWidths widths{0};
     stl::Vector<stl::StringView> fontnames;
     stl::Vector<stl::StringView> remaps;
     stl::Vector<stl::StringView> uriSchemes;
-    Darts* uriSchemeTrie = nullptr;
+    // The lowercased spellings of uriSchemes, interned as a trie at
+    // parse time; the host adapter answers scheme policy from it.
+    const Darts* uriSchemeTrie = nullptr;
     stl::StringView shell;
-    stl::StringView title;
-    stl::StringView dump;
+    // -debug: append window/font/grid diagnostics to this file.
+    stl::StringView debugTrace;
     OptionSource titleSource = OptionSource::NONE;
-    Color bg{};
-    Color cr{};
-    Color fg{};
-    AnsiPalette palette{};
-    bool altScrollMode = false;
-    bool altSendsEscape = false;
-    bool autoCopyMode = false;
-    bool allowOsc52Read = false;
-    bool allowWindowOps = false;
-    bool osc52SelectClipboard = false;
-    bool boldColors = false;
-    bool kittyCtrlBaseLayout = false;
     bool vulkanInfo = false;
     // Skip the direct-storage swapchain even where the surface offers
     // it: the CI shadow renderer walks the blit fallback this way.
     bool vulkanBlit = false;
     bool login = false;
     bool maximized = false;
+    // Fullscreen wins over maximized when both are set: it is the
+    // stronger request, and the window manager would otherwise
+    // resolve the pair for us differently on every platform.
+    bool fullscreen = false;
     // The macOS natural-text-editing preset: Option word gestures and
     // Command line gestures as chords, at the price of the reserved
     // Command arrows.
@@ -92,11 +83,10 @@ struct Options {
     bool noDecorations = false;
     bool showWraps = false;
     bool rv = false;
-    bool verbose = false;
-
-    // Whether a detected plain URI with this scheme, in any case, may be
-    // presented as openable.
-    bool uriSchemeAllowed(stl::StringView scheme) const;
 
     static Options* create(stl::ObjPool& pool, Brand& brand, char** argv, int argc, OptionsLoad load = OptionsLoad::Startup);
+
+    // Case-folds the scheme and answers from uriSchemeTrie; false until
+    // the trie exists, so an unparsed instance allows nothing.
+    bool uriSchemeAllowed(stl::StringView scheme) const;
 };

@@ -3,7 +3,6 @@
  * MIT licensed
  * See the file LICENSE.MIT for the full license.
  */
-
 /* part of this file is part of Zutty.
  * Copyright (C) 2020 Tom Szilagyi
  *
@@ -14,55 +13,56 @@
  */
 
 #include "application.h"
+
+#include "pty.h"
 #include "brand.h"
-#include "composer.h"
-#include "configuration.h"
-#include "drop_target.h"
-#include "fatal.h"
-#include "font_pack.h"
-#include "num.h"
-#include "input_bindings.h"
-#include "input_remap.h"
-#include "listener.h"
+#include "render.h"
 #include "options.h"
 #include "session.h"
-#include "pty.h"
-#include "render.h"
 #include "startup.h"
-
-#include "test_input.h"
+#include "composer.h"
+#include "font_pack.h"
 #include "test_mode.h"
+#include "test_input.h"
+#include "debug_trace.h"
+#include "drop_target.h"
+#include "input_remap.h"
+#include "span_shaper.h"
 #include "ui_csd_tabs.h"
-#include "vterm.h"
+#include "configuration.h"
+#include "input_bindings.h"
 
+#include <lib/vterm/num.h>
+#include <lib/vterm/fatal.h>
+#include <lib/vterm/vterm.h>
+#include <lib/vterm/listener.h>
+
+#include <std/ios/sys.h>
+#include <std/sys/crt.h>
+#include <std/str/view.h>
+#include <std/alg/defer.h>
+#include <std/sys/throw.h>
+#include <std/alg/minmax.h>
+#include <std/lib/vector.h>
+#include <std/str/builder.h>
+#include <std/mem/obj_pool.h>
+
+#include <math.h>
+#include <stdio.h>
+#include <limits.h>
+#include <locale.h>
+#include <signal.h>
+#include <stdlib.h>
+#include <unistd.h>
+#include <langinfo.h>
 #include <plt/drop.h>
+#include <sys/wait.h>
 #include <plt/fiber.h>
 #include <plt/input.h>
 #include <plt/mutex.h>
-#include <plt/platform.h>
-#include <plt/window.h>
-
-#include <std/alg/defer.h>
-#include <std/alg/minmax.h>
-#include <std/ios/sys.h>
-#include <std/lib/vector.h>
-#include <std/str/builder.h>
-#include <std/str/view.h>
-#include <std/sys/crt.h>
-#include <std/sys/throw.h>
-
-#include <stdlib.h>
-#include <stdio.h>
-#include <langinfo.h>
-#include <locale.h>
-#include <limits.h>
-#include <math.h>
-#include <signal.h>
 #include <sys/types.h>
-#include <sys/wait.h>
-#include <unistd.h>
-
-#include <std/mem/obj_pool.h>
+#include <plt/window.h>
+#include <plt/platform.h>
 
 using namespace stl;
 using namespace plt;
@@ -241,8 +241,8 @@ void ApplicationImpl::replaceFontpack(u16 size) {
     ObjPool* const previousPool = fontpackPool;
     Fontpack* const previousFonts = composer.fonts;
     const u16 previousFontSize = composer.fontSize;
-    const u16 previousGlyphWidth = composer.glyphWidth;
-    const u16 previousGlyphHeight = composer.glyphHeight;
+    const u16 previousGlyphWidth = composer.geometry.cellPixelWidth;
+    const u16 previousGlyphHeight = composer.geometry.cellPixelHeight;
     ObjPool* const nextPool = ObjPool::fromMemoryRaw();
     Fontpack* next;
     try {
@@ -258,15 +258,22 @@ void ApplicationImpl::replaceFontpack(u16 size) {
     fontpackPool = nextPool;
     composer.fontSize = size;
     composer.fonts = next;
-    composer.setGlyphSize(next->getPx(), next->getPy());
+    composer.geometry.setCellPixelSize(next->getPx(), next->getPy());
+    if (composer.debugFd >= 0) {
+        StringBuilder line;
+        line << StringView(u8"font size=") << (i64)(size);
+        line << StringView(u8" cell ") << (i64)(previousGlyphWidth) << StringView(u8"x") << (i64)(previousGlyphHeight);
+        line << StringView(u8" -> ") << (i64)(next->getPx()) << StringView(u8"x") << (i64)(next->getPy());
+        debugTraceLine(composer, StringView(line));
+    }
     try {
         publishFontChanged();
     } catch (...) {
         fontpackPool = previousPool;
         composer.fontSize = previousFontSize;
         composer.fonts = previousFonts;
-        composer.glyphWidth = previousGlyphWidth;
-        composer.glyphHeight = previousGlyphHeight;
+        composer.geometry.cellPixelWidth = previousGlyphWidth;
+        composer.geometry.cellPixelHeight = previousGlyphHeight;
         delete nextPool;
         throw;
     }
@@ -279,11 +286,11 @@ void ApplicationImpl::fontChanged() {
     // from it must not displace -geometry. Afterwards font changes keep
     // the grid the user has.
     const bool sized = !initialGeometryPending;
-    const u16 columns = sized && composer.columns != 0 ? composer.columns : composer.opts->nCols;
-    const u16 rows = sized && composer.rows != 0 ? composer.rows : composer.opts->nRows;
-    const u32 border = 2u * composer.borderPixels();
-    composer.window->requestMinimumSize(border + composer.glyphWidth, border + composer.glyphHeight);
-    composer.window->requestResizeUnit(composer.glyphWidth, composer.glyphHeight, border, border);
+    const u16 columns = sized && composer.geometry.columns != 0 ? composer.geometry.columns : composer.opts->nCols;
+    const u16 rows = sized && composer.geometry.rows != 0 ? composer.geometry.rows : composer.opts->nRows;
+    const u32 border = 2u * composer.geometry.borderPixels;
+    composer.window->requestMinimumSize(border + composer.geometry.cellPixelWidth, border + composer.geometry.cellPixelHeight);
+    composer.window->requestResizeUnit(composer.geometry.cellPixelWidth, composer.geometry.cellPixelHeight, border, border);
     const plt::WindowInfo info = composer.window->info();
     if (info.fullscreen || info.maximized || info.tiled) {
         // The window is the screen's, the compositor's tile, or the
@@ -294,7 +301,7 @@ void ApplicationImpl::fontChanged() {
         composer.window->requestFrame();
         return;
     }
-    composer.window->requestResize(border + (u32)(columns)*composer.glyphWidth, border + (u32)(rows)*composer.glyphHeight);
+    composer.window->requestResize(border + (u32)(columns)*composer.geometry.cellPixelWidth, border + (u32)(rows)*composer.geometry.cellPixelHeight);
 }
 
 void ApplicationImpl::setFontSize(u16 size) {
@@ -440,8 +447,8 @@ bool ApplicationImpl::presentTerminal() {
         return false;
     }
     // Keep the input-method candidate window anchored to the cursor cell.
-    const u16 border = composer.borderPixels();
-    composer.window->requestTextInputRect((i32)(border + (u32)(output->cursor.posX) * composer.glyphWidth), (i32)(border + (u32)(output->cursor.posY) * composer.glyphHeight), composer.glyphWidth, composer.glyphHeight);
+    const u16 border = composer.geometry.borderPixels;
+    composer.window->requestTextInputRect((i32)(border + (u32)(output->cursor.posX) * composer.geometry.cellPixelWidth), (i32)(border + (u32)(output->cursor.posY) * composer.geometry.cellPixelHeight), composer.geometry.cellPixelWidth, composer.geometry.cellPixelHeight);
     vterm->consume();
     return true;
 }
@@ -462,13 +469,22 @@ void ApplicationImpl::updateWindowInfo(const plt::WindowInfo& info) {
     if (isfinite(info.contentScale) && info.contentScale > 0.0f) {
         composer.setContentScale(info.contentScale);
     }
-    const u16 previousColumns = composer.columns;
-    const u16 previousRows = composer.rows;
-    composer.resize((u16)(min(info.width, (u32)(UINT16_MAX))), (u16)(min(info.height, (u32)(UINT16_MAX))));
-    if (composer.opts->verbose && (composer.columns != previousColumns || composer.rows != previousRows)) {
+    const u16 previousColumns = composer.geometry.columns;
+    const u16 previousRows = composer.geometry.rows;
+    composer.geometry.resize((u16)(min(info.width, (u32)(UINT16_MAX))), (u16)(min(info.height, (u32)(UINT16_MAX))), composer.host);
+    if (composer.debugFd >= 0 && (composer.geometry.columns != previousColumns || composer.geometry.rows != previousRows)) {
+        StringBuilder line;
+        line << StringView(u8"window ") << (i64)(info.width) << StringView(u8"x") << (i64)(info.height);
+        line << StringView(u8" scale=") << (i64)((int)(info.contentScale * 100));
+        line << StringView(u8" fullscreen=") << (i64)(info.fullscreen) << StringView(u8" maximized=") << (i64)(info.maximized) << StringView(u8" tiled=") << (i64)(info.tiled);
+        line << StringView(u8" grid ") << (i64)(previousColumns) << StringView(u8"x") << (i64)(previousRows);
+        line << StringView(u8" -> ") << (i64)(composer.geometry.columns) << StringView(u8"x") << (i64)(composer.geometry.rows);
+        debugTraceLine(composer, StringView(line));
+    }
+    if (composer.opts->vt.verbose && (composer.geometry.columns != previousColumns || composer.geometry.rows != previousRows)) {
         // The full-screen transition bugs live in the resize sequence a
         // platform delivers; the trace is how a report shows it to us.
-        fprintf(stderr, "%s: window: %ux%u px, grid %ux%u -> %ux%u, scale %.2f%s%s\n", composer.brand->identifierCString(), info.width, info.height, previousColumns, previousRows, composer.columns, composer.rows, (double)(info.contentScale), info.fullscreen ? ", fullscreen" : "", info.maximized ? ", maximized" : "");
+        fprintf(stderr, "%s: window: %ux%u px, grid %ux%u -> %ux%u, scale %.2f%s%s\n", composer.brand->identifierCString(), info.width, info.height, previousColumns, previousRows, composer.geometry.columns, composer.geometry.rows, (double)(info.contentScale), info.fullscreen ? ", fullscreen" : "", info.maximized ? ", maximized" : "");
     }
     if (initialGeometryPending) {
         // The first real metrics (glyphs at the live content scale) size
@@ -495,11 +511,11 @@ bool ApplicationImpl::eventLoop() {
 }
 
 void ApplicationImpl::showWindow() {
-    const u32 border = 2u * composer.borderPixels();
-    const u32 width = border + (u32)(composer.opts->nCols) * composer.glyphWidth;
-    const u32 height = border + (u32)(composer.opts->nRows) * composer.glyphHeight;
+    const u32 border = 2u * composer.geometry.borderPixels;
+    const u32 width = border + (u32)(composer.opts->nCols) * composer.geometry.cellPixelWidth;
+    const u32 height = border + (u32)(composer.opts->nRows) * composer.geometry.cellPixelHeight;
     composer.window->requestShow();
-    composer.resize((u16)(min(width, (u32)(UINT16_MAX))), (u16)(min(height, (u32)(UINT16_MAX))));
+    composer.geometry.resize((u16)(min(width, (u32)(UINT16_MAX))), (u16)(min(height, (u32)(UINT16_MAX))), composer.host);
 }
 
 void ApplicationImpl::checkLocale() {
@@ -547,7 +563,7 @@ int ApplicationImpl::run(int argc, char* argv[]) {
     // process-wide constants identical for every terminal behind the
     // window, and setenv() must never run in a forked child of a
     // multithreaded process: glibc's environ lock is not reset at fork.
-    configureTerminalChildEnvironment(*composer.brand, composer.opts->widths);
+    configureTerminalChildEnvironment(*composer.brand, composer.opts->vt.widths);
     composer.fontSize = composer.opts->fontsize;
     composer.inputRemap = InputRemap::create(composer);
     if (testFd >= 0) {
@@ -566,7 +582,7 @@ int ApplicationImpl::run(int argc, char* argv[]) {
         *composer.pool,
         {
             .appId = composer.brand->identifier(),
-            .title = composer.opts->title,
+            .title = composer.opts->vt.title,
             .width = (u32)(max(320, (int)(composer.opts->nCols) * composer.opts->fontsize / 2)),
             .height = (u32)(max(200, (int)(composer.opts->nRows) * composer.opts->fontsize)),
             .decorations = !composer.opts->noDecorations,
@@ -578,6 +594,8 @@ int ApplicationImpl::run(int argc, char* argv[]) {
             .appName = composer.brand->displayName(),
         }
     );
+    composer.installVtHost();
+    openDebugTrace(composer);
 #if defined(__APPLE__)
     // The title-bar tab strip: a fire-and-forget listener over the
     // NSWindow the render context carries.
@@ -590,9 +608,8 @@ int ApplicationImpl::run(int argc, char* argv[]) {
     contentScaleChanged();
 
     replaceFontpack(composer.opts->fontsize);
-    if (composer.opts->maximized) {
-        composer.window->requestMaximized(true);
-    }
+    composer.shaper = SpanShaper::create(composer, *composer.pool);
+    applyStartupWindowState(composer);
     showWindow();
 
     setupSignals();
@@ -615,4 +632,12 @@ Application* Application::create(Composer& composer) {
     ApplicationImpl* const application = composer.pool->make<ApplicationImpl>(composer);
     application->wire();
     return application;
+}
+
+void applyStartupWindowState(Composer& composer) {
+    if (composer.opts->fullscreen) {
+        composer.window->requestFullscreen(true);
+    } else if (composer.opts->maximized) {
+        composer.window->requestMaximized(true);
+    }
 }

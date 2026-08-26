@@ -27,6 +27,7 @@ boldColors = false
 border = 2
 
 # CLI: -config PATH — Load PATH instead of the default config file; command line only.
+# CLI: -debug PATH — Append window, font and grid diagnostics to PATH; for bug reports, command line only.
 
 # import — Load other configuration files first, then apply this file's
 # own keys on top; later imports override earlier ones. ~/ expands to the
@@ -78,6 +79,10 @@ login = false
 
 # CLI: -maximized / +maximized — Start with the window maximized.
 maximized = false
+
+# CLI: -fullscreen / +fullscreen — Start with the window fullscreen.
+# Fullscreen wins when both this and maximized are set.
+fullscreen = false
 
 # CLI: -naturalEditing / +naturalEditing — Bind the macOS natural text editing chords: Option arrows move by word, Command arrows to the line ends, Option/Command Backspace erase the word or line. Off by default: the Command arrows stay reserved for tab navigation.
 naturalEditing = false

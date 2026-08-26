@@ -8,7 +8,7 @@ scaled by the option value."""
 import unittest
 
 from font_fixture import NERD_FONT
-from harness import Shitty, run_startup_failure
+from harness import TEST_PLATFORM, Shitty, run_startup_failure
 
 
 def render(soft, text):
@@ -32,6 +32,9 @@ def ink(width, height, pixels):
     return total
 
 
+# -soft drives the FreeType rasterizer; on cocoa the CoreText renderer
+# sits first in the chain and the option has nothing to steer.
+@unittest.skipIf(TEST_PLATFORM == "cocoa", "CoreText renders here; -soft is a FreeType knob")
 class SoftRenderTest(unittest.TestCase):
     def test_soft_zero_departs_from_the_hinted_grid(self):
         classic = render(None, "Hamburg")
@@ -45,6 +48,8 @@ class SoftRenderTest(unittest.TestCase):
         self.assertEqual(light[:2], dark[:2])
         self.assertGreater(ink(*dark), ink(*light))
 
+
+class SoftOptionTest(unittest.TestCase):
     def test_out_of_range_values_fail_loudly(self):
         for value in ("101", "-2", "x"):
             with self.subTest(value=value):

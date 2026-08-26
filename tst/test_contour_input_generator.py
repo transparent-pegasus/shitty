@@ -4,7 +4,7 @@
 
 import unittest
 
-from harness import Shitty
+from harness import TEST_PLATFORM, Shitty
 
 
 RELEASE = 0
@@ -107,6 +107,15 @@ class ContourInputGeneratorTest(unittest.TestCase):
                     with self.subTest(
                         key=key, modifiers=modifiers
                     ):
+                        if (
+                            TEST_PLATFORM == "cocoa"
+                            and modifiers == SUPER
+                            and key in (KEY_RIGHT, KEY_LEFT)
+                        ):
+                            # Cmd+Left/Right walk the tabs on macOS
+                            # (the issue 82 reservation); the chord is
+                            # the frontend's and never reaches the pty.
+                            continue
                         terminal.frontend_key_event(
                             key, PRESS, modifiers=modifiers
                         )

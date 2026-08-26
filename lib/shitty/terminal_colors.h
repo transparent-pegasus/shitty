@@ -6,7 +6,7 @@
 
 #pragma once
 
-#include "ansi_palette.h"
+#include <lib/vterm/ansi_palette.h>
 
 #include <std/str/view.h>
 

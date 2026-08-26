@@ -6,9 +6,13 @@
 
 #pragma once
 
+#include <lib/vterm/vt_config.h>
+#include <lib/vterm/vt_geometry.h>
+#include <lib/vterm/cell_extra_store.h>
+
 #include <std/lib/list.h>
-#include <std/mem/obj_pool.h>
 #include <std/sys/types.h>
+#include <std/mem/obj_pool.h>
 
 namespace stl {
     class ObjPool;
@@ -18,6 +22,7 @@ namespace stl {
 
 namespace plt {
     struct FiberMutex;
+    struct Scheduler;
     struct InputSink;
     struct Platform;
     struct Window;
@@ -37,9 +42,11 @@ struct InputBindings;
 struct InputRemap;
 struct Options;
 struct Renderer;
+struct SpanShaper;
 struct SessionSet;
 struct Pty;
 struct LaunchCommand;
+struct VtHost;
 struct Vterm;
 struct VtermTraceFactory;
 struct FontRequest;
@@ -54,24 +61,33 @@ struct Composer {
     Composer(stl::ObjPool* pool, Brand& brand);
 
     void setContentScale(float scale);
-    void setGlyphSize(u16 width, u16 height);
-    void setCellExtras(CellExtraStore* extras);
-    void resize(u16 pixelWidth, u16 pixelHeight);
-    u16 borderPixels() const;
+    // Builds the VtHost adapter over the platform window and installs it
+    // with the scheduler; call once the window exists.
+    void installVtHost();
+    // Publishes a parsed snapshot: the core's view (the config slot, the
+    // precomputed border) follows the swap atomically.
+    void setOptions(const Options* options);
     float boxDrawingStroke() const;
     Font* loadFont(stl::ObjPool& owner, const FontRequest& request, FontMetrics& metrics);
     // Adopts a face fresh from a resolver and rasterizes it with the first
     // renderer in fontRenderers that succeeds; null when none does.
     Font* renderFace(stl::ObjPool& owner, FontFace* face, u16 pixels, FontKind kind, FontMetrics& metrics);
 
+    // The embedding pieces of the VT core, handed to Vterm::create
+    // explicitly: the grid geometry, the reloadable config slot, the
+    // cell-extra slot, and the fiber machinery every terminal shares.
+    VtGeometry geometry;
+    VtConfigSlot vtConfig;
+    VtCellExtras extras;
+    stl::SmallObjAllocator* smallObjects = nullptr;
+    plt::Scheduler* scheduler = nullptr;
+    VtHost* host = nullptr;
     stl::ObjPool* pool = nullptr;
     Brand* brand = nullptr;
     // Owns the renderer and its listeners; dropped and rebuilt wholesale
     // when the renderer loses its surface.
     stl::ObjPool::Ref rendererPool = stl::ObjPool::fromMemory();
-    stl::SmallObjAllocator* smallObjects = nullptr;
     Application* application = nullptr;
-    CellExtraStore* cellExtras = nullptr;
     Fontpack* fonts = nullptr;
     // The rasterized-glyph memo shared by every font backend; fonts key
     // it with private namespaces, so it never needs resetting on a font
@@ -87,6 +103,10 @@ struct Composer {
     Config* config = nullptr;
     plt::InputSink* input = nullptr;
     Renderer* renderer = nullptr;
+    // The render side of the cell grid: shapes rows into strips through
+    // fonts. The model never touches it; created with the fontpack
+    // machinery and null in purely headless embeddings.
+    SpanShaper* shaper = nullptr;
     // Process-lifetime PTY factory and the immutable command each new
     // session launches. Individual handles never leave SessionSet.
     Pty* pty = nullptr;
@@ -96,27 +116,24 @@ struct Composer {
     plt::Platform* platform = nullptr;
     plt::Window* window = nullptr;
 
-    u16 columns = 0;
-    u16 rows = 0;
-    u16 pixelWidth = 0;
-    u16 pixelHeight = 0;
-    u16 glyphWidth = 0;
-    u16 glyphHeight = 0;
     u16 fontSize = 0;
     float contentScale = 1.0f;
+    // The -debug trace file, or -1; debug_trace.cpp writes through it.
+    int debugFd = -1;
 
-    // resize() commits all geometry fields before walking this list.
+    // resize commits the core geometry before the host adapter walks
+    // this list.
     stl::IntrusiveList resizedListeners;
     stl::IntrusiveList contentScaleChangedListeners;
+    stl::IntrusiveList fontChangedListeners;
+    // Vterms publish their own undecorated title through the host
+    // adapter into this list. The session owner decides whether the
+    // source is visible and how the window presents it.
+    stl::IntrusiveList titleChangedListeners;
+    stl::IntrusiveList configChangedListeners;
     stl::IntrusiveList fontIncListeners;
     stl::IntrusiveList fontDecListeners;
     stl::IntrusiveList fontResetListeners;
-    stl::IntrusiveList fontChangedListeners;
-    stl::IntrusiveList cellExtrasChangedListeners;
-    stl::IntrusiveList configChangedListeners;
-    // Vterms publish their own undecorated title here. The session owner
-    // decides whether the source is visible and how the window presents it.
-    stl::IntrusiveList titleChangedListeners;
     // SessionSet commits its tab model - count, order, active index,
     // labels - and then walks this list; the window chrome projects the
     // model from here.

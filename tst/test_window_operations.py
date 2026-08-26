@@ -93,6 +93,29 @@ class WindowOperationsTest(unittest.TestCase):
             restored = terminal.model_snapshot()
             self.assertEqual((restored.columns, restored.rows), (10, 4))
 
+    def test_fullscreen_startup_takes_the_screen_and_wins_over_maximized(self):
+        # -fullscreen applies on the startup path, so the window opens
+        # at the headless screen size. With -maximized alongside,
+        # fullscreen is the one request made: toggling fullscreen off
+        # restores the original geometry, which a lingering maximized
+        # request would have held at the screen size instead.
+        with Shitty(
+            columns=10,
+            rows=4,
+            extra_arguments=(
+                "-fullscreen",
+                "-maximized",
+                "-allowWindowOps",
+                "true",
+            ),
+        ) as terminal:
+            terminal.write(b"\x1b[18t")
+            self.assertEqual(terminal.read_input(), b"\x1b[8;1076;1916t")
+
+            terminal.write(b"\x1b[10;2t")
+            terminal.write(b"\x1b[18t")
+            self.assertEqual(terminal.read_input(), b"\x1b[8;4;10t")
+
     def test_window_position_reports_signed_coordinates_as_unsigned(self):
         with window_terminal() as terminal:
             terminal.window_info(x=-10, y=-20)

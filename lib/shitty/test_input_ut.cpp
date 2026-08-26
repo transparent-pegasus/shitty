@@ -4,16 +4,16 @@
  * See the file LICENSE.MIT for the full license.
  */
 
+#include "composer.h"
 #include "test_input.h"
 
-#include "composer.h"
-#include "input_handler.h"
-#include "listener.h"
+#include <lib/vterm/listener.h>
+#include <lib/vterm/input_handler.h>
+
+#include <std/tst/ut.h>
+#include <std/mem/obj_pool.h>
 
 #include <plt/input.h>
-
-#include <std/mem/obj_pool.h>
-#include <std/tst/ut.h>
 
 using namespace stl;
 using namespace plt;

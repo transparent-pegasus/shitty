@@ -4,14 +4,13 @@
  * See the file LICENSE.MIT for the full license.
  */
 
-#include "parser.h"
+#include <lib/vterm/parser.h>
+#include <lib/vterm/terminal_types.h>
 
-#include "terminal_types.h"
-
+#include <std/tst/ut.h>
+#include <std/str/view.h>
 #include <std/lib/buffer.h>
 #include <std/mem/obj_pool.h>
-#include <std/str/view.h>
-#include <std/tst/ut.h>
 
 #include <cstdio>
 #include <cstring>

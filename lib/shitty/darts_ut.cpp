@@ -6,34 +6,34 @@
 
 #include "darts.h"
 
-#include <std/mem/obj_pool.h>
 #include <std/tst/ut.h>
+#include <std/mem/obj_pool.h>
 
 using namespace stl;
 
 STD_TEST_SUITE(Darts) {
     STD_TEST(ExactMatch) {
         static const StringView keys[] = {
-            StringView(u8"font"),
-            StringView(u8"fontsize"),
+            StringView(u8"tab"),
+            StringView(u8"tabsize"),
             StringView(u8"fg"),
         };
 
         auto pool = ObjPool::fromMemory();
         const Darts* trie = Darts::create(*pool, keys, 3);
-        STD_INSIST(trie->find(StringView(u8"font")) == 0);
-        STD_INSIST(trie->find(StringView(u8"fontsize")) == 1);
+        STD_INSIST(trie->find(StringView(u8"tab")) == 0);
+        STD_INSIST(trie->find(StringView(u8"tabsize")) == 1);
         STD_INSIST(trie->find(StringView(u8"fg")) == 2);
-        STD_INSIST(trie->find(StringView(u8"fon")) == Darts::missing);
-        STD_INSIST(trie->find(StringView(u8"fontsizes")) == Darts::missing);
+        STD_INSIST(trie->find(StringView(u8"ta")) == Darts::missing);
+        STD_INSIST(trie->find(StringView(u8"tabsizes")) == Darts::missing);
         STD_INSIST(trie->find(StringView(u8"x")) == Darts::missing);
         STD_INSIST(trie->find(StringView()) == Darts::missing);
     }
 
     STD_TEST(PrefixResolution) {
         static const StringView keys[] = {
-            StringView(u8"font"),
-            StringView(u8"fontsize"),
+            StringView(u8"tab"),
+            StringView(u8"tabsize"),
             StringView(u8"fg"),
             StringView(u8"verbose"),
             StringView(u8"version"),
@@ -42,16 +42,16 @@ STD_TEST_SUITE(Darts) {
 
         auto pool = ObjPool::fromMemory();
         const Darts* trie = Darts::create(*pool, keys, 6);
-        STD_INSIST(trie->resolve(StringView(u8"font")) == 0);
-        STD_INSIST(trie->resolve(StringView(u8"fonts")) == 1);
-        STD_INSIST(trie->resolve(StringView(u8"f")) == Darts::ambiguous);
+        STD_INSIST(trie->resolve(StringView(u8"tab")) == 0);
+        STD_INSIST(trie->resolve(StringView(u8"tabs")) == 1);
+        STD_INSIST(trie->resolve(StringView(u8"t")) == Darts::ambiguous);
         STD_INSIST(trie->resolve(StringView(u8"fg")) == 2);
         STD_INSIST(trie->resolve(StringView(u8"v")) == 5);
         STD_INSIST(trie->resolve(StringView(u8"ve")) == Darts::ambiguous);
         STD_INSIST(trie->resolve(StringView(u8"verb")) == 3);
         STD_INSIST(trie->resolve(StringView(u8"vers")) == 4);
         STD_INSIST(trie->resolve(StringView(u8"x")) == Darts::missing);
-        STD_INSIST(trie->resolve(StringView(u8"fontsizes")) == Darts::missing);
+        STD_INSIST(trie->resolve(StringView(u8"tabsizes")) == Darts::missing);
         STD_INSIST(trie->resolve(StringView()) == Darts::ambiguous);
     }
 

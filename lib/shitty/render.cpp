@@ -7,7 +7,7 @@
 #include "render.h"
 
 #include "render_reference.h"
-#include "terminal_types.h"
+#include <lib/vterm/terminal_types.h>
 
 #include <plt/window.h>
 

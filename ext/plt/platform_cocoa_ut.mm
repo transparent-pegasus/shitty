@@ -40,13 +40,13 @@ STD_TEST_SUITE(PlatformCocoaWindow) {
     }
 
     // A Regular-policy application gets a menu bar whether or not it
-    // supplies one, so an app with no NSMenu shows an empty "Shitty" menu
+    // supplies one, so an app with no NSMenu shows an empty "Example" menu
     // when the pointer reaches the top of a fullscreen window. The same
     // gap loses Cmd+Q, which is a menu key equivalent rather than a key
     // event: with no item carrying it, nothing quits.
     STD_TEST(MainMenuCarriesTheApplicationItems) {
         @autoreleasepool {
-            NSMenu* const menu = cocoaBuildMainMenu(@"Shitty");
+            NSMenu* const menu = cocoaBuildMainMenu(@"Example");
             STD_INSIST(menu != nil);
             STD_INSIST(menu.numberOfItems >= 1);
 

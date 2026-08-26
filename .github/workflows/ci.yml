@@ -7,10 +7,6 @@ on:
       - master
   workflow_dispatch:
     inputs:
-      darwin_tests:
-        description: Run the Darwin build and test shards
-        type: boolean
-        default: false
       sandboxed:
         description: Audit declared build inputs under strace
         type: boolean
@@ -90,7 +86,7 @@ jobs:
           set -o pipefail
           export VK_DRIVER_FILES="$(find /usr/share/vulkan/icd.d -name 'lvp_icd*.json' -print -quit)"
           export VK_ICD_FILENAMES="$VK_DRIVER_FILES"
-          ./build test 2>&1 | tee "$RUNNER_TEMP/tests-alpine.log"
+          ./build test a so tgz 2>&1 | tee "$RUNNER_TEMP/tests-alpine.log"
 
       - name: Summarize failure
         if: failure()
@@ -152,7 +148,7 @@ jobs:
           PLT_X11_TEST_REQUIRED: "1"
         run: |
           set -o pipefail
-          ./build test 2>&1 | tee "$RUNNER_TEMP/tests-fedora.log"
+          ./build test a so tgz 2>&1 | tee "$RUNNER_TEMP/tests-fedora.log"
 
       - name: Smoke-test X11 with Vulkan lavapipe
         env:
@@ -560,7 +556,6 @@ jobs:
 
   tests-darwin-0:
     name: Tests Darwin 0/5
-    if: ${{ github.event_name == 'workflow_dispatch' && inputs.darwin_tests }}
     needs: build-darwin
     runs-on: macos-15
     timeout-minutes: 90
@@ -600,7 +595,6 @@ jobs:
 
   tests-darwin-1:
     name: Tests Darwin 1/5
-    if: ${{ github.event_name == 'workflow_dispatch' && inputs.darwin_tests }}
     needs: build-darwin
     runs-on: macos-15
     timeout-minutes: 90
@@ -640,7 +634,6 @@ jobs:
 
   tests-darwin-2:
     name: Tests Darwin 2/5
-    if: ${{ github.event_name == 'workflow_dispatch' && inputs.darwin_tests }}
     needs: build-darwin
     runs-on: macos-15
     timeout-minutes: 90
@@ -680,7 +673,6 @@ jobs:
 
   tests-darwin-3:
     name: Tests Darwin 3/5
-    if: ${{ github.event_name == 'workflow_dispatch' && inputs.darwin_tests }}
     needs: build-darwin
     runs-on: macos-15
     timeout-minutes: 90
@@ -720,7 +712,6 @@ jobs:
 
   tests-darwin-4:
     name: Tests Darwin 4/5
-    if: ${{ github.event_name == 'workflow_dispatch' && inputs.darwin_tests }}
     needs: build-darwin
     runs-on: macos-15
     timeout-minutes: 90

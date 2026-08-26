@@ -7,28 +7,47 @@
 #include "composer.h"
 
 #include "brand.h"
-#include "cell_extra_store.h"
-#include "font_coretext.h"
-#include "font_embedded.h"
+#include "options.h"
 #include "font_face.h"
-#include "font_fontconfig.h"
-#include "font_freetype.h"
 #include "font_pack.h"
 #include "font_path.h"
 #include "glyph_cache.h"
-#include "options.h"
+#include "input_router.h"
+#include "font_coretext.h"
+#include "font_embedded.h"
+#include "font_freetype.h"
 #include "font_renderer.h"
 #include "font_resolver.h"
 #include "input_bindings.h"
-#include "input_router.h"
-#include "listener.h"
+#include "font_fontconfig.h"
 
+#include <lib/vterm/vterm.h>
+#include <lib/vterm/vt_host.h>
+#include <lib/vterm/listener.h>
+#include <lib/vterm/cell_extra_store.h>
+
+#include <std/sys/throw.h>
 #include <std/alg/minmax.h>
 #include <std/dbg/assert.h>
 #include <std/mem/small_obj_allocator.h>
-#include <std/sys/throw.h>
+
+#include <plt/window.h>
+#include <plt/platform.h>
 
 using namespace stl;
+
+namespace {
+    static u16 scaledBorder(u16 base, float scale) {
+        const float scaled = base * scale;
+        if (!(scaled > 0)) {
+            return 0;
+        }
+        if (scaled >= 3000) {
+            return 3000;
+        }
+        return (u16)(scaled + 0.5f);
+    }
+}
 
 Composer::Composer(ObjPool* pool_)
     : Composer(pool_, *Brand::generic())
@@ -39,8 +58,10 @@ Composer::Composer(ObjPool* pool_, Brand& brand_)
     : pool(pool_)
     , brand(&brand_)
 {
-    opts = pool->make<Options>();
-    cellExtras = CellExtraStore::create(*this, 0);
+    Options* const defaults = pool->make<Options>();
+    defaults->vt.brandName = brand->displayName();
+    setOptions(defaults);
+    extras.store = CellExtraStore::create(extras, *pool, 0);
     smallObjects = SmallObjAllocator::create(pool);
     glyphs = createGlyphCache(*pool);
     input = createInputRouter(*this);
@@ -91,12 +112,130 @@ Composer::Composer(ObjPool* pool_, Brand& brand_)
     }
 }
 
+namespace {
+    // The GUI's side of the core protocol: window requests forward to
+    // the platform window, events fan into the composer's listener
+    // lists - the session set and the application subscribe there.
+    struct ComposerVtHost final: public VtHost {
+        explicit ComposerVtHost(Composer& composer);
+
+        plt::Clipboard* primary() override;
+        plt::Clipboard* secondary() override;
+        plt::WindowInfo info() override;
+        void requestFrame() override;
+        void requestResize(u32 width, u32 height) override;
+        void requestMaximized(bool maximized) override;
+        void requestFullscreen(bool fullscreen) override;
+        void requestIconify() override;
+        void requestRestore() override;
+        void requestMove(i32 x, i32 y) override;
+        void requestFocus() override;
+        void requestAttention() override;
+        void requestPointerIcon(plt::PointerIcon icon) override;
+        void requestOpenUri(stl::StringView uri) override;
+        bool uriSchemeAllowed(stl::StringView scheme) override;
+        void titleChanged(const VtermTitleChanged& event) override;
+        void resized() override;
+
+        Composer& composer;
+    };
+
+    static void walk(IntrusiveList& listeners, void* argument = nullptr) {
+        for (IntrusiveNode* node = listeners.mutFront(); node != listeners.mutEnd();) {
+            Listener* const listener = static_cast<Listener*>(node);
+            node = node->next;
+            listener->onListen(argument);
+        }
+    }
+}
+
+ComposerVtHost::ComposerVtHost(Composer& composer_)
+    : composer(composer_)
+{
+}
+
+plt::Clipboard* ComposerVtHost::primary() {
+    return composer.window->primary();
+}
+
+plt::Clipboard* ComposerVtHost::secondary() {
+    return composer.window->secondary();
+}
+
+plt::WindowInfo ComposerVtHost::info() {
+    return composer.window->info();
+}
+
+void ComposerVtHost::requestFrame() {
+    composer.window->requestFrame();
+}
+
+void ComposerVtHost::requestResize(u32 width, u32 height) {
+    composer.window->requestResize(width, height);
+}
+
+void ComposerVtHost::requestMaximized(bool maximized) {
+    composer.window->requestMaximized(maximized);
+}
+
+void ComposerVtHost::requestFullscreen(bool fullscreen) {
+    composer.window->requestFullscreen(fullscreen);
+}
+
+void ComposerVtHost::requestIconify() {
+    composer.window->requestIconify();
+}
+
+void ComposerVtHost::requestRestore() {
+    composer.window->requestRestore();
+}
+
+void ComposerVtHost::requestMove(i32 x, i32 y) {
+    composer.window->requestMove(x, y);
+}
+
+void ComposerVtHost::requestFocus() {
+    composer.window->requestFocus();
+}
+
+void ComposerVtHost::requestAttention() {
+    composer.window->requestAttention();
+}
+
+void ComposerVtHost::requestPointerIcon(plt::PointerIcon icon) {
+    composer.window->requestPointerIcon(icon);
+}
+
+void ComposerVtHost::requestOpenUri(StringView uri) {
+    composer.window->requestOpenUri(uri);
+}
+
+bool ComposerVtHost::uriSchemeAllowed(StringView scheme) {
+    return composer.opts->uriSchemeAllowed(scheme);
+}
+
+void ComposerVtHost::titleChanged(const VtermTitleChanged& event) {
+    walk(composer.titleChangedListeners, (void*)(&event));
+}
+
+void ComposerVtHost::resized() {
+    walk(composer.resizedListeners);
+}
+
+void Composer::installVtHost() {
+    host = pool->make<ComposerVtHost>(*this);
+    // Unit fixtures install the adapter without a platform; anything
+    // that spawns pty fibers brings one.
+    scheduler = platform != nullptr ? platform->scheduler() : nullptr;
+}
+
 void Composer::setContentScale(float scale) {
     STD_ASSERT(scale > 0.0f);
     if (contentScale == scale) {
         return;
     }
     contentScale = scale;
+    geometry.borderPixels = scaledBorder(opts->border, contentScale);
     for (IntrusiveNode* node = contentScaleChangedListeners.mutFront(); node != contentScaleChangedListeners.mutEnd();) {
         Listener* const listener = static_cast<Listener*>(node);
         node = node->next;
@@ -104,14 +243,10 @@ void Composer::setContentScale(float scale) {
     }
 }
 
-void Composer::setGlyphSize(u16 width, u16 height) {
-    STD_ASSERT(width != 0);
-    STD_ASSERT(height != 0);
-    if (glyphWidth == width && glyphHeight == height) {
-        return;
-    }
-    glyphWidth = width;
-    glyphHeight = height;
+void Composer::setOptions(const Options* options) {
+    opts = options;
+    vtConfig.config = &options->vt;
+    geometry.borderPixels = scaledBorder(options->border, contentScale);
 }
 
 float Composer::boxDrawingStroke() const {
@@ -121,58 +256,9 @@ float Composer::boxDrawingStroke() const {
             return measured;
         }
     }
-    const u16 shortSide = glyphWidth < glyphHeight ? glyphWidth : glyphHeight;
+    const u16 shortSide = geometry.cellPixelWidth < geometry.cellPixelHeight ? geometry.cellPixelWidth : geometry.cellPixelHeight;
     const float fallback = (float)(shortSide) / 12.0f;
     return fallback > 1.0f ? fallback : 1.0f;
-}
-
-void Composer::setCellExtras(CellExtraStore* extras) {
-    if (cellExtras == extras) {
-        return;
-    }
-    cellExtras = extras;
-    for (IntrusiveNode* node = cellExtrasChangedListeners.mutFront(); node != cellExtrasChangedListeners.mutEnd();) {
-        Listener* const listener = static_cast<Listener*>(node);
-        node = node->next;
-        listener->onListen();
-    }
-}
-
-u16 Composer::borderPixels() const {
-    const float scaled = opts->border * contentScale;
-    if (!(scaled > 0)) {
-        return 0;
-    }
-    if (scaled >= 3000) {
-        return 3000;
-    }
-    return (u16)(scaled + 0.5f);
-}
-
-void Composer::resize(u16 pixelWidth_, u16 pixelHeight_) {
-    STD_ASSERT(glyphWidth != 0);
-    STD_ASSERT(glyphHeight != 0);
-
-    const u32 borders = 2u * borderPixels();
-    const u32 contentWidth = pixelWidth_ > borders ? pixelWidth_ - borders : 0;
-    const u32 contentHeight = pixelHeight_ > borders ? pixelHeight_ - borders : 0;
-    const u16 columns_ = (u16)(max<u32>(1, contentWidth / glyphWidth));
-    const u16 rows_ = (u16)(max<u32>(1, contentHeight / glyphHeight));
-
-    if (columns == columns_ && rows == rows_ && pixelWidth == pixelWidth_ && pixelHeight == pixelHeight_) {
-        return;
-    }
-
-    columns = columns_;
-    rows = rows_;
-    pixelWidth = pixelWidth_;
-    pixelHeight = pixelHeight_;
-
-    for (IntrusiveNode* node = resizedListeners.mutFront(); node != resizedListeners.mutEnd();) {
-        Listener* const listener = static_cast<Listener*>(node);
-        node = node->next;
-        listener->onListen();
-    }
 }
 
 Font* Composer::loadFont(ObjPool& owner, const FontRequest& request, FontMetrics& metrics) {

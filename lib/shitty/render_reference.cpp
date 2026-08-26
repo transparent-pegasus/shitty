@@ -6,28 +6,29 @@
 
 #include "render_reference.h"
 
-#include "cell_extra_store.h"
+#include "options.h"
 #include "composer.h"
 #include "font_pack.h"
+#include "span_shaper.h"
 #include "render_synthesis.h"
-#include "hex.h"
-#include "options.h"
-#include "screen.h"
-#include "vterm.h"
-#include "vterm_test.h"
 
-#include <plt/platform_headless.h>
-#include <plt/window.h>
+#include <lib/vterm/hex.h>
+#include <lib/vterm/vterm.h>
+#include <lib/vterm/screen.h>
+#include <lib/vterm/vt_test.h>
+#include <lib/vterm/cell_extra_store.h>
 
 #include <std/alg/xchg.h>
+#include <std/str/view.h>
 #include <std/dbg/assert.h>
 #include <std/lib/buffer.h>
 #include <std/lib/vector.h>
-#include <std/mem/obj_pool.h>
 #include <std/str/builder.h>
-#include <std/str/view.h>
+#include <std/mem/obj_pool.h>
 
 #include <string.h>
+#include <plt/window.h>
+#include <plt/platform_headless.h>
 
 using namespace stl;
 
@@ -135,7 +136,7 @@ namespace {
         void putPixel(int x, int y, Color color);
         ReferenceCell materialize(const TerminalCell& cell, u8 lineAttribute, const TerminalColors& colors) const;
         void captureStrips(const TerminalUpdate& update);
-        void captureSpan(Screen& shapes, u16 row, const ScreenRowSpan& span);
+        void captureSpan(SpanShaper& shaper, u16 row, const ScreenRowSpan& span);
         void renderCell(const TerminalUpdate& update, const ReferenceCell& cell, u16 column, u16 row);
         bool render(const TerminalUpdate& update, const Vector<ReferenceCell>& cells);
         void captureModel();
@@ -242,7 +243,7 @@ bool ReferenceRendererImpl::targetReady() const {
     if (target_ == nullptr || target_->pixels == nullptr || target_->format != plt::HeadlessPixelFormat::RGB8) {
         return false;
     }
-    if (target_->width != composer_.pixelWidth || target_->height != composer_.pixelHeight || target_->stride < target_->width * 3) {
+    if (target_->width != composer_.geometry.pixelWidth || target_->height != composer_.geometry.pixelHeight || target_->stride < target_->width * 3) {
         return false;
     }
     return target_->length >= (size_t)(target_->stride) * target_->height;
@@ -269,38 +270,38 @@ void ReferenceRendererImpl::putPixel(int x, int y, Color color) {
     pixel[2] = color.blue;
 }
 
-void ReferenceRendererImpl::captureSpan(Screen& shapes, u16 row, const ScreenRowSpan& span) {
-    if (span.end <= span.begin || span.end > composer_.columns) {
+void ReferenceRendererImpl::captureSpan(SpanShaper& shaper, u16 row, const ScreenRowSpan& span) {
+    if (span.end <= span.begin || span.end > composer_.geometry.columns) {
         return;
     }
     if (span.missing) {
         // A synthesized run: renderCell draws its coverage from the
         // codepoint, matching the GPU shader.
         for (u16 column = span.begin; column < span.end; ++column) {
-            cellStrips_.mut((size_t)(row)*composer_.columns + column) = {0, 0, stripSynthesized};
+            cellStrips_.mut((size_t)(row)*composer_.geometry.columns + column) = {0, 0, stripSynthesized};
         }
         return;
     }
-    const u16 width = composer_.glyphWidth;
-    const size_t pixels = (size_t)(span.end - span.begin) * width * composer_.glyphHeight;
+    const u16 width = composer_.geometry.cellPixelWidth;
+    const size_t pixels = (size_t)(span.end - span.begin) * width * composer_.geometry.cellPixelHeight;
     const size_t pixel = span.color ? sizeof(u32) : 1;
     const u8* source;
     if (span.color) {
         // spanColorUsed counts u32 pixels, matching the offsets.
-        if (span.offset + pixels > shapes.spanColorUsed()) {
+        if (span.offset + pixels > shaper.spanColorUsed()) {
             return;
         }
-        source = (const u8*)(shapes.spanColor() + span.offset);
+        source = (const u8*)(shaper.spanColor() + span.offset);
     } else {
-        if (span.offset + pixels > shapes.spanMaskUsed()) {
+        if (span.offset + pixels > shaper.spanMaskUsed()) {
             return;
         }
-        source = shapes.spanMask() + span.offset;
+        source = shaper.spanMask() + span.offset;
     }
     const size_t base = stripStore_.used();
     stripStore_.append(source, pixels * pixel);
     for (u16 column = span.begin; column < span.end; ++column) {
-        cellStrips_.mut((size_t)(row)*composer_.columns + column) = {
+        cellStrips_.mut((size_t)(row)*composer_.geometry.columns + column) = {
             (u32)(base + (size_t)(column - span.begin) * width * pixel),
             (u32)(span.end - span.begin) * width,
             span.color ? stripColor : stripMask,
@@ -309,21 +310,22 @@ void ReferenceRendererImpl::captureSpan(Screen& shapes, u16 row, const ScreenRow
 }
 
 void ReferenceRendererImpl::captureStrips(const TerminalUpdate& update) {
-    const size_t count = (size_t)(composer_.columns) * composer_.rows;
+    const size_t count = (size_t)(composer_.geometry.columns) * composer_.geometry.rows;
     cellStrips_.clear();
     cellStrips_.zero(count);
     stripStore_.reset();
-    if (update.shapes == nullptr) {
+    if (update.shapes == nullptr || composer_.shaper == nullptr) {
         return;
     }
     Screen& shapes = *update.shapes;
-    resizeVector(spanScratch_, composer_.columns);
-    // Shaping a row can collect the arenas and move every strip shaped so
+    SpanShaper& shaper = *composer_.shaper;
+    resizeVector(spanScratch_, composer_.geometry.columns);
+    // Shaping a row can reset the arenas and move every strip shaped so
     // far; the byte copies stay valid, the held offsets do not, so redo
     // the pass until it completes within one arena generation.
     u32 generation;
     do {
-        generation = shapes.spanGeneration();
+        generation = shaper.spanGeneration();
         memset(cellStrips_.mutData(), 0, cellStrips_.length() * sizeof(CellStrip));
         stripStore_.reset();
         if (update.shapeFromCells) {
@@ -332,32 +334,33 @@ void ReferenceRendererImpl::captureStrips(const TerminalUpdate& update) {
             // screen rows do not participate.
             for (size_t index = 0; index < update.rowCount; ++index) {
                 const TerminalRow& row = update.rows[index];
-                const size_t spans = shapes.shapeCells(row.cells, composer_.columns, 0, spanScratch_.mutData());
+                const size_t spans = shaper.shapeCells(row.cells, composer_.geometry.columns, 0, spanScratch_.mutData());
                 for (size_t entry = 0; entry < spans; ++entry) {
-                    captureSpan(shapes, row.row, spanScratch_[entry]);
+                    captureSpan(shaper, row.row, spanScratch_[entry]);
                 }
             }
             continue;
         }
-        for (u16 row = 0; row < composer_.rows; ++row) {
-            const size_t spans = shapes.rowSpans(row, spanScratch_.mutData());
+        for (u16 row = 0; row < composer_.geometry.rows; ++row) {
+            const ScreenRowRef rowRef = shapes.viewRow(row);
+            const size_t spans = shaper.rowSpans(rowRef.cells, composer_.geometry.columns, rowRef.id, spanScratch_.mutData());
             for (size_t index = 0; index < spans; ++index) {
-                captureSpan(shapes, row, spanScratch_[index]);
+                captureSpan(shaper, row, spanScratch_[index]);
             }
         }
         if (update.overlayCount != 0) {
             // The preedit preview covers the underlying strips wholesale:
             // its blank cells hide the text below them.
-            const size_t base = (size_t)(update.overlayRow) * composer_.columns + update.overlayColumn;
+            const size_t base = (size_t)(update.overlayRow) * composer_.geometry.columns + update.overlayColumn;
             for (u16 index = 0; index < update.overlayCount; ++index) {
                 cellStrips_.mut(base + index) = {};
             }
-            const size_t spans = shapes.shapeCells(update.overlayCells, update.overlayCount, update.overlayColumn, spanScratch_.mutData());
+            const size_t spans = shaper.shapeCells(update.overlayCells, update.overlayCount, update.overlayColumn, spanScratch_.mutData());
             for (size_t index = 0; index < spans; ++index) {
-                captureSpan(shapes, update.overlayRow, spanScratch_[index]);
+                captureSpan(shaper, update.overlayRow, spanScratch_[index]);
             }
         }
-    } while (generation != shapes.spanGeneration());
+    } while (generation != shaper.spanGeneration());
 }
 
 ReferenceCell ReferenceRendererImpl::materialize(const TerminalCell& cell, u8 lineAttribute, const TerminalColors& colors) const {
@@ -368,7 +371,7 @@ ReferenceCell ReferenceRendererImpl::materialize(const TerminalCell& cell, u8 li
     result.underlineColor = result.foreground;
     result.lineAttribute = lineAttribute;
     if (cell.hasExtra()) {
-        const CellExtraView extra = composer_.cellExtras->view(cell);
+        const CellExtraView extra = composer_.extras.store->view(cell);
         result.hyperlink = extra.hyperlinkDisplayId;
         result.grapheme = extra.grapheme.empty() ? 0 : cell.extraRef();
         if (extra.underlineColor != cell.foreground()) {
@@ -383,12 +386,12 @@ ReferenceCell ReferenceRendererImpl::materialize(const TerminalCell& cell, u8 li
 void ReferenceRendererImpl::renderCell(const TerminalUpdate& update, const ReferenceCell& cell, u16 column, u16 row) {
     const TerminalCell& source = cell.source;
     const bool doubleLine = cell.lineAttribute != 0;
-    const int cellWidth = composer_.glyphWidth;
-    const int cellHeight = composer_.glyphHeight;
+    const int cellWidth = composer_.geometry.cellPixelWidth;
+    const int cellHeight = composer_.geometry.cellPixelHeight;
     coverage_.zero((size_t)(cellWidth)*cellHeight);
     color_.zero((size_t)(cellWidth)*cellHeight * 4);
     hasColor_ = false;
-    const CellStrip strip = cellStrips_[(size_t)(row)*composer_.columns + column];
+    const CellStrip strip = cellStrips_[(size_t)(row)*composer_.geometry.columns + column];
     if (strip.kind == stripSynthesized) {
         for (int y = 0; y < cellHeight; ++y) {
             for (int x = 0; x < cellWidth; ++x) {
@@ -449,8 +452,8 @@ void ReferenceRendererImpl::renderCell(const TerminalUpdate& update, const Refer
         background = cursor;
     }
 
-    const int outputX = composer_.borderPixels() + column * composer_.glyphWidth;
-    const int outputY = composer_.borderPixels() + row * composer_.glyphHeight;
+    const int outputX = composer_.geometry.borderPixels + column * composer_.geometry.cellPixelWidth;
+    const int outputY = composer_.geometry.borderPixels + row * composer_.geometry.cellPixelHeight;
     const auto* coverage = (const u8*)(coverage_.data());
     const auto* color = (const u8*)(color_.data());
     const bool hidden = source.conceal || (source.blink && !update.blinkVisible);
@@ -475,7 +478,7 @@ void ReferenceRendererImpl::renderCell(const TerminalUpdate& update, const Refer
         }
     }
 
-    const u32 cellIndex = (u32)(row)*composer_.columns + column;
+    const u32 cellIndex = (u32)(row)*composer_.geometry.columns + column;
     const bool explicitLink = cell.hyperlink != 0 && cell.hyperlink == update.hoveredHyperlink;
     const bool plainLink = cellIndex >= update.hoveredLinkBegin && cellIndex < update.hoveredLinkEnd;
     const bool hyperlinkUnderline = !source.underlined() && (explicitLink || plainLink);
@@ -526,7 +529,7 @@ void ReferenceRendererImpl::renderCell(const TerminalUpdate& update, const Refer
             }
         }
     } else if (cursorHere && update.cursor.style == TerminalCursor::Style::bar) {
-        const int thickness = maximum(1, composer_.glyphWidth / 6);
+        const int thickness = maximum(1, composer_.geometry.cellPixelWidth / 6);
         for (int y = 0; y < cellHeight; ++y) {
             for (int x = 0; x < thickness; ++x) {
                 putPixel(outputX + x, outputY + y, cursor);
@@ -541,10 +544,10 @@ bool ReferenceRendererImpl::render(const TerminalUpdate& update, const Vector<Re
     }
     // The padding follows the live default background (OSC 11), matching
     // xterm, kitty, foot, and the rest.
-    clearTarget(update.colors != nullptr ? update.colors->defaultBackground : composer_.opts->bg);
-    for (u16 row = 0; row < composer_.rows; ++row) {
-        for (u16 column = 0; column < composer_.columns; ++column) {
-            const ReferenceCell& cell = cells[(size_t)(row)*composer_.columns + column];
+    clearTarget(update.colors != nullptr ? update.colors->defaultBackground : composer_.opts->vt.bg);
+    for (u16 row = 0; row < composer_.geometry.rows; ++row) {
+        for (u16 column = 0; column < composer_.geometry.columns; ++column) {
+            const ReferenceCell& cell = cells[(size_t)(row)*composer_.geometry.columns + column];
             renderCell(update, cell, column, row);
         }
     }
@@ -595,7 +598,7 @@ void ReferenceRendererImpl::captureState(const TerminalUpdate& update) {
         if (cell.grapheme == 0) {
             continue;
         }
-        const GraphemeView grapheme = composer_.cellExtras->grapheme(cell.grapheme);
+        const GraphemeView grapheme = composer_.extras.store->grapheme(cell.grapheme);
         if (!grapheme.empty()) {
             ++graphemeCells_;
             graphemeCodepoints_ += grapheme.size();
@@ -619,12 +622,12 @@ bool ReferenceRendererImpl::updateOnce(const TerminalUpdate& update) {
     if (!targetReady() || update.colors == nullptr) {
         return false;
     }
-    const size_t count = (size_t)(composer_.columns) * composer_.rows;
-    const bool shapeChanged = columns_ != composer_.columns || rows_ != composer_.rows;
+    const size_t count = (size_t)(composer_.geometry.columns) * composer_.geometry.rows;
+    const bool shapeChanged = columns_ != composer_.geometry.columns || rows_ != composer_.geometry.rows;
     if (shapeChanged) {
         // A reshaped grid needs every row before the retained cells mean
         // anything.
-        if (update.rowCount != composer_.rows) {
+        if (update.rowCount != composer_.geometry.rows) {
             return false;
         }
         for (size_t index = 0; index < update.rowCount; ++index) {
@@ -635,11 +638,11 @@ bool ReferenceRendererImpl::updateOnce(const TerminalUpdate& update) {
     }
     for (size_t index = 0; index < update.rowCount; ++index) {
         const TerminalRow& row = update.rows[index];
-        if (row.cells == nullptr || row.row >= composer_.rows) {
+        if (row.cells == nullptr || row.row >= composer_.geometry.rows) {
             return false;
         }
     }
-    if (update.overlayCount != 0 && (update.overlayCells == nullptr || update.overlayRow >= composer_.rows || (size_t)(update.overlayColumn) + update.overlayCount > composer_.columns)) {
+    if (update.overlayCount != 0 && (update.overlayCells == nullptr || update.overlayRow >= composer_.geometry.rows || (size_t)(update.overlayColumn) + update.overlayCount > composer_.geometry.columns)) {
         return false;
     }
 
@@ -650,13 +653,13 @@ bool ReferenceRendererImpl::updateOnce(const TerminalUpdate& update) {
     }
     for (size_t index = 0; index < update.rowCount; ++index) {
         const TerminalRow& row = update.rows[index];
-        for (u16 column = 0; column < composer_.columns; ++column) {
-            next.mut((size_t)(row.row) * composer_.columns + column) = materialize(row.cells[column], row.lineAttribute, *update.colors);
+        for (u16 column = 0; column < composer_.geometry.columns; ++column) {
+            next.mut((size_t)(row.row) * composer_.geometry.columns + column) = materialize(row.cells[column], row.lineAttribute, *update.colors);
         }
     }
     if (update.overlayCount != 0) {
         // The preview covers the row content beneath it.
-        const size_t base = (size_t)(update.overlayRow) * composer_.columns + update.overlayColumn;
+        const size_t base = (size_t)(update.overlayRow) * composer_.geometry.columns + update.overlayColumn;
         for (u16 index = 0; index < update.overlayCount; ++index) {
             next.mut(base + index) = materialize(update.overlayCells[index], 0, *update.colors);
         }
@@ -666,8 +669,8 @@ bool ReferenceRendererImpl::updateOnce(const TerminalUpdate& update) {
         return false;
     }
 
-    columns_ = composer_.columns;
-    rows_ = composer_.rows;
+    columns_ = composer_.geometry.columns;
+    rows_ = composer_.geometry.rows;
     cells_.xchg(next);
     colors_ = update.colors;
     lastUpdateCells_ = update.rowCount * columns_;
@@ -719,7 +722,7 @@ TerminalUpdate ReferenceRendererImpl::renderUpdate() const {
         // cluster.
         if (index < cellGraphemes_.length() && cellGraphemes_[index].count != 0) {
             const GraphemeSlice slice = cellGraphemes_[index];
-            composer_.cellExtras->setGrapheme(renderCells_.mut(index), graphemeStore_.data() + slice.offset, slice.count);
+            composer_.extras.store->setGrapheme(renderCells_.mut(index), graphemeStore_.data() + slice.offset, slice.count);
         }
     }
     for (u16 row = 0; row < rows_; ++row) {

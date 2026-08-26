@@ -6,27 +6,28 @@
 
 #include "session.h"
 
-#include "brand.h"
-#include "composer.h"
-#include "input_bindings.h"
-#include "input_handler.h"
-#include "listener.h"
-#include "options.h"
 #include "pty.h"
-#include "vterm.h"
+#include "brand.h"
+#include "options.h"
+#include "composer.h"
+#include "debug_trace.h"
+#include "input_bindings.h"
 
-#include <plt/fiber.h>
-#include <plt/loop_wake.h>
-#include <plt/platform.h>
-#include <plt/poller.h>
-#include <plt/window.h>
-
-#include <stdio.h>
+#include <lib/vterm/vterm.h>
+#include <lib/vterm/listener.h>
+#include <lib/vterm/input_handler.h>
 
 #include <std/lib/buffer.h>
 #include <std/lib/vector.h>
-#include <std/mem/obj_pool.h>
 #include <std/thr/runable.h>
+#include <std/mem/obj_pool.h>
+
+#include <stdio.h>
+#include <plt/fiber.h>
+#include <plt/poller.h>
+#include <plt/window.h>
+#include <plt/platform.h>
+#include <plt/loop_wake.h>
 
 using namespace stl;
 
@@ -63,6 +64,14 @@ namespace {
 
     struct CallSessionsFontChanged final: public Listener {
         explicit CallSessionsFontChanged(SessionSetImpl* parent);
+
+        void onListen(void*) override;
+
+        SessionSetImpl* parent;
+    };
+
+    struct CallSessionsConfigChanged final: public Listener {
+        explicit CallSessionsConfigChanged(SessionSetImpl* parent);
 
         void onListen(void*) override;
 
@@ -127,6 +136,7 @@ namespace {
 
         void everyTerminalResized();
         void everyTerminalFontChanged();
+        void everyTerminalConfigChanged();
         void titleChanged(const VtermTitleChanged& event);
         void publishWindowTitle(StringView title);
         void newSession() override;
@@ -190,6 +200,7 @@ namespace {
         CallSessionAction clearAction{this, InputActions::Clear};
         CallSessionsResize resizeAction{this};
         CallSessionsFontChanged fontChangedAction{this};
+        CallSessionsConfigChanged configChangedAction{this};
         CallTitleChanged titleChangedAction{this};
         CallSessionAction newTabAction{this, InputActions::NewTab};
         CallSessionAction closeTabAction{this, InputActions::CloseTab};
@@ -238,6 +249,15 @@ CallSessionsFontChanged::CallSessionsFontChanged(SessionSetImpl* parent_)
 
 void CallSessionsFontChanged::onListen(void*) {
     parent->everyTerminalFontChanged();
+}
+
+CallSessionsConfigChanged::CallSessionsConfigChanged(SessionSetImpl* parent_)
+    : parent(parent_)
+{
+}
+
+void CallSessionsConfigChanged::onListen(void*) {
+    parent->everyTerminalConfigChanged();
 }
 
 CallTitleChanged::CallTitleChanged(SessionSetImpl* parent_)
@@ -330,7 +350,7 @@ void SessionSetImpl::newSession() {
     try {
         handle = composer.pty->spawn(*arena, *composer.launch);
         handle->resize(ptySize());
-        terminal = Vterm::create(*arena, composer, *handle, composer.vtermTraceFactory);
+        terminal = Vterm::create(*arena, composer.geometry, composer.vtConfig, composer.extras, *composer.smallObjects, *composer.scheduler, *composer.host, *handle, composer.vtermTraceFactory);
     } catch (...) {
         delete arena;
         throw;
@@ -352,7 +372,7 @@ void SessionSetImpl::newSession() {
     if (composer.window != nullptr) {
         composer.window->requestFrame();
     }
-    if (composer.opts->verbose) {
+    if (composer.opts->vt.verbose) {
         fprintf(stderr, "%s: session: opened, %zu total\n", composer.brand->identifierCString(), count_);
     }
 }
@@ -417,7 +437,7 @@ void SessionSetImpl::activate(size_t index) {
     // window gained focus or the pointer arrived still has to hear it.
     sessions[index].terminal->focus(focused_);
     sessions[index].terminal->pointerPresence(pointerPresent_);
-    if (composer.opts->verbose) {
+    if (composer.opts->vt.verbose) {
         fprintf(stderr, "%s: session: activated %zu of %zu\n", composer.brand->identifierCString(), index + 1, count_);
     }
     // Every mutation of the tab model funnels through here (opening and
@@ -436,12 +456,27 @@ void SessionSetImpl::everyTerminalResized() {
     for (size_t at = 0; at < count_; ++at) {
         sessions[at].terminal->windowResized();
         sessions[at].handle->resize(ptySize());
+        debugTraceTerminal(composer, StringView(u8"resized"), *sessions[at].terminal);
     }
 }
 
 void SessionSetImpl::everyTerminalFontChanged() {
     for (size_t at = 0; at < count_; ++at) {
-        sessions[at].terminal->fontChanged();
+        sessions[at].terminal->presentationInvalidated();
+        debugTraceTerminal(composer, StringView(u8"font-invalidated"), *sessions[at].terminal);
+    }
+}
+
+void SessionSetImpl::everyTerminalConfigChanged() {
+    for (size_t at = 0; at < count_; ++at) {
+        try {
+            sessions[at].terminal->configChanged();
+        } catch (...) {
+            // configChanged() allocates before it touches terminal state,
+            // so a failure keeps this terminal on its previous
+            // materialization without robbing the other sessions of the
+            // reload.
+        }
     }
 }
 
@@ -529,10 +564,10 @@ bool SessionSetImpl::canReap(Vterm* terminal) const {
 
 PtySize SessionSetImpl::ptySize() const {
     return {
-        .columns = composer.columns,
-        .rows = composer.rows,
-        .pixelWidth = (u32)(composer.columns) * composer.glyphWidth,
-        .pixelHeight = (u32)(composer.rows) * composer.glyphHeight,
+        .columns = composer.geometry.columns,
+        .rows = composer.geometry.rows,
+        .pixelWidth = (u32)(composer.geometry.columns) * composer.geometry.cellPixelWidth,
+        .pixelHeight = (u32)(composer.geometry.rows) * composer.geometry.cellPixelHeight,
     };
 }
 
@@ -589,6 +624,7 @@ SessionSet* SessionSet::create(Composer& composer) {
     }
     composer.resizedListeners.pushBack(&sessions->resizeAction);
     composer.fontChangedListeners.pushBack(&sessions->fontChangedAction);
+    composer.configChangedListeners.pushBack(&sessions->configChangedAction);
     composer.titleChangedListeners.pushBack(&sessions->titleChangedAction);
     sessions->reaper_ = composer.platform->scheduler()->create(*composer.pool, sessions->reapBody);
     sessions->eofWake_ = composer.platform->createLoopWake(*composer.pool, sessions->eofReady);

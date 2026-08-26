@@ -13,3 +13,9 @@ struct Application {
 
     static Application* create(Composer& composer);
 };
+
+// The startup window-state request from the parsed options, shared by
+// the interactive run and the test-mode driver: fullscreen wins over
+// maximized - it is the stronger request, and leaving the pair
+// unresolved would let every window manager settle it differently.
+void applyStartupWindowState(Composer& composer);

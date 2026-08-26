@@ -7,21 +7,20 @@
 #include "input_remap.h"
 
 #include "brand.h"
-#include "composer.h"
-#include "listener.h"
 #include "options.h"
-
+#include "composer.h"
 #include "input_keys.h"
 
-#include <plt/input.h>
+#include <lib/vterm/listener.h>
 
 #include <std/ios/sys.h>
-#include <std/mem/obj_pool.h>
 #include <std/str/view.h>
 #include <std/sym/i_map.h>
 #include <std/sym/s_map.h>
+#include <std/mem/obj_pool.h>
 
 #include <string.h>
+#include <plt/input.h>
 
 using namespace stl;
 

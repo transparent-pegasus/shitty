@@ -16,6 +16,26 @@ SHA-256:
 The font is used only as a deterministic real-font rendering fixture. Its
 license is the SIL Open Font License included alongside it.
 
+# Amiri test font
+
+`Amiri-Regular.ttf` and `LICENSE.Amiri` come from the Google Fonts
+repository at commit `39d11bc313031c9f68e21a297ce5e4a15cc5365e`
+(`ofl/amiri/`).
+
+Source: <https://github.com/google/fonts>
+
+SHA-256:
+
+- `Amiri-Regular.ttf`:
+  `ab391c4147d054c48976e98322ad0eefe1427aa0e0502a12a4c75d80a70cfcd7`
+- `LICENSE.Amiri`:
+  `72de68e5954f4fdd24702292ef5a32f003ca960ec9330dc86e5eefb5dffb9b22`
+
+The font covers U+FDFD, the widest ligature glyph in Unicode: its ink
+spans several cells while its terminal width stays one column. Tests use
+it to pin how a span's ink overflows into the captured blanks behind it.
+Its license is the SIL Open Font License included alongside it.
+
 # Bitmap strike test fonts
 
 `spleen-8x16.bdf` and `LICENSE.spleen` come from the Spleen 2.1.0

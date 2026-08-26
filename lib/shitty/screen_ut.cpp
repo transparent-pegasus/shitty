@@ -4,19 +4,16 @@
  * See the file LICENSE.MIT for the full license.
  */
 
-#include "screen.h"
-
-#include "cell_extra_store.h"
 #include "composer.h"
-#include "listener.h"
-#include "font_embedded.h"
-#include "font_pack.h"
-#include "font_resolver.h"
-#include "vterm.h"
 
-#include <std/mem/obj_pool.h>
-#include <std/str/view.h>
+#include <lib/vterm/vterm.h>
+#include <lib/vterm/screen.h>
+#include <lib/vterm/listener.h>
+#include <lib/vterm/cell_extra_store.h>
+
 #include <std/tst/ut.h>
+#include <std/str/view.h>
+#include <std/mem/obj_pool.h>
 
 #include <cstring>
 
@@ -183,7 +180,7 @@ namespace {
         screen.writeCodepoint(2, 3, 'P', false, protectedAttrs, 0, 1, TerminalCell{});
         screen.writeCodepoint(1, 2, 0x4e00, true, attributes(), 0, 2, TerminalCell{});
         screen.writeCodepoint(3, info.columns - 3, 0x4e01, true, attributes(), 0, 3, TerminalCell{});
-        const u32 hyperlink = composer.cellExtras->getOrCreateHyperlink(StringView(u8"damage"), StringView(u8"https://damage.test"), 7);
+        const u32 hyperlink = composer.extras.store->getOrCreateHyperlink(StringView(u8"damage"), StringView(u8"https://damage.test"), 7);
         screen.writeCodepoint(4, 4, 'H', false, attributes(), hyperlink, 2, TerminalCell{});
         screen.setWrapped(0, info.columns - 1);
     }
@@ -201,10 +198,10 @@ namespace {
     static void verifyDamageGeometry(u16 columns, u16 rows, Setup setup, Operation operation, bool expectsDamage) {
         auto pool = ObjPool::fromMemory();
         Composer& composer = *pool->make<Composer>(pool.mutPtr());
-        composer.setCellExtras(CellExtraStore::create(composer, (size_t)(columns)*rows * 2));
+        composer.extras.replace(CellExtraStore::create(composer.extras, *composer.pool, (size_t)(columns)*rows * 2));
         TerminalColors colors;
         configureColors(colors);
-        Screen* screen = Screen::createPrimary(composer, *pool, columns, rows, &colors, 8);
+        Screen* screen = Screen::createPrimary(composer.extras, *pool, columns, rows, &colors, 8);
         fillDamagePattern(*screen, composer);
         setup(*screen);
 
@@ -243,10 +240,10 @@ namespace {
         auto sourcePool = ObjPool::fromMemory();
         auto destinationPool = ObjPool::fromMemory();
         Composer& composer = *composerPool->make<Composer>(composerPool.mutPtr());
-        composer.setCellExtras(CellExtraStore::create(composer, (size_t)(columns) * 10));
+        composer.extras.replace(CellExtraStore::create(composer.extras, *composer.pool, (size_t)(columns) * 10));
         TerminalColors colors;
         configureColors(colors);
-        Screen* source = primary ? Screen::createPrimary(composer, *sourcePool, columns, 5, &colors, 8) : Screen::createAlternate(composer, *sourcePool, columns, 5, &colors);
+        Screen* source = primary ? Screen::createPrimary(composer.extras, *sourcePool, columns, 5, &colors, 8) : Screen::createAlternate(composer.extras, *sourcePool, columns, 5, &colors);
         fillDamagePattern(*source, composer);
 
         DamageCanvas incremental;
@@ -343,10 +340,10 @@ STD_TEST_SUITE(Screen) {
     STD_TEST(EmptyRectangleChecksumsToZero) {
         auto pool = ObjPool::fromMemory();
         Composer& composer = *pool->make<Composer>(pool.mutPtr());
-        composer.setCellExtras(CellExtraStore::create(composer, 4));
+        composer.extras.replace(CellExtraStore::create(composer.extras, *composer.pool, 4));
         TerminalColors colors;
         configureColors(colors);
-        Screen* screen = Screen::createAlternate(composer, *pool, 2, 2, &colors);
+        Screen* screen = Screen::createAlternate(composer.extras, *pool, 2, 2, &colors);
 
         STD_INSIST(screen->checksum(0, 0, 0, 0, 0) == 0);
         STD_INSIST(screen->checksum(0, 0, 0, 0, ChecksumKeepBlanks) == 0);
@@ -356,11 +353,11 @@ STD_TEST_SUITE(Screen) {
     STD_TEST(InitializesGeometryCapacityAndDamage) {
         auto pool = ObjPool::fromMemory();
         Composer& composer = *pool->make<Composer>(pool.mutPtr());
-        composer.setCellExtras(CellExtraStore::create(composer, 32));
+        composer.extras.replace(CellExtraStore::create(composer.extras, *composer.pool, 32));
         TerminalColors colors;
         configureColors(colors);
 
-        Screen* screen = Screen::createPrimary(composer, *pool, 4, 3, &colors, 5);
+        Screen* screen = Screen::createPrimary(composer.extras, *pool, 4, 3, &colors, 5);
         const ScreenInfo info = screen->info();
 
         STD_INSIST(info.columns == 4);
@@ -377,18 +374,18 @@ STD_TEST_SUITE(Screen) {
     STD_TEST(WritesSixelCellsWithSharedPalette) {
         auto pool = ObjPool::fromMemory();
         Composer& composer = *pool->make<Composer>(pool.mutPtr());
-        composer.setCellExtras(CellExtraStore::create(composer, 32));
+        composer.extras.replace(CellExtraStore::create(composer.extras, *composer.pool, 32));
         TerminalColors colors;
         configureColors(colors);
 
-        Screen* screen = Screen::createPrimary(composer, *pool, 4, 3, &colors, 5);
+        Screen* screen = Screen::createPrimary(composer.extras, *pool, 4, 3, &colors, 5);
         u8 patches[2 * SixelPatch::pixelCount] = {};
         // First patch paints its top-left pixel; the second stays
         // fully transparent and must not allocate an extra.
         patches[0] = 7;
         u8 palette[SixelPatch::paletteBytes] = {};
         palette[18] = 250;
-        const u8* interned = composer.cellExtras->internSixelPalette(palette);
+        const u8* interned = composer.extras.store->internSixelPalette(palette);
         TerminalCell attrs{};
         TerminalCell eraseAttrs{};
         screen->resetDamage();
@@ -399,7 +396,7 @@ STD_TEST_SUITE(Screen) {
         const TerminalCell blank = screen->testCell(1, 2);
         STD_INSIST(painted.hasExtra());
         STD_INSIST(!blank.hasExtra());
-        const CellExtraView view = composer.cellExtras->view(painted);
+        const CellExtraView view = composer.extras.store->view(painted);
         STD_INSIST(view.sixelPixels != nullptr);
         STD_INSIST(view.sixelPixels[0] == 7);
         STD_INSIST(view.sixelPalette == interned);
@@ -409,11 +406,11 @@ STD_TEST_SUITE(Screen) {
     STD_TEST(RevisionTracksVisibleState) {
         auto pool = ObjPool::fromMemory();
         Composer& composer = *pool->make<Composer>(pool.mutPtr());
-        composer.setCellExtras(CellExtraStore::create(composer, 32));
+        composer.extras.replace(CellExtraStore::create(composer.extras, *composer.pool, 32));
         TerminalColors colors;
         configureColors(colors);
 
-        Screen* screen = Screen::createPrimary(composer, *pool, 4, 3, &colors, 5);
+        Screen* screen = Screen::createPrimary(composer.extras, *pool, 4, 3, &colors, 5);
         const u32 initial = screen->info().revision;
         screen->resetDamage();
         STD_INSIST(screen->info().revision == initial);
@@ -436,11 +433,11 @@ STD_TEST_SUITE(Screen) {
     STD_TEST(KeepsRequestedScrollbackWithinPowerOfTwoRing) {
         auto pool = ObjPool::fromMemory();
         Composer& composer = *pool->make<Composer>(pool.mutPtr());
-        composer.setCellExtras(CellExtraStore::create(composer, 32));
+        composer.extras.replace(CellExtraStore::create(composer.extras, *composer.pool, 32));
         TerminalColors colors;
         configureColors(colors);
 
-        Screen* screen = Screen::createPrimary(composer, *pool, 2, 3, &colors, 2);
+        Screen* screen = Screen::createPrimary(composer.extras, *pool, 2, 3, &colors, 2);
 
         STD_INSIST(screen->info().cellCapacity == 10);
         for (u16 index = 0; index < 6; ++index) {
@@ -452,11 +449,11 @@ STD_TEST_SUITE(Screen) {
     STD_TEST(KeepsZeroScrollbackDisabled) {
         auto pool = ObjPool::fromMemory();
         Composer& composer = *pool->make<Composer>(pool.mutPtr());
-        composer.setCellExtras(CellExtraStore::create(composer, 8));
+        composer.extras.replace(CellExtraStore::create(composer.extras, *composer.pool, 8));
         TerminalColors colors;
         configureColors(colors);
 
-        Screen* screen = Screen::createAlternate(composer, *pool, 2, 3, &colors);
+        Screen* screen = Screen::createAlternate(composer.extras, *pool, 2, 3, &colors);
         screen->scrollRows(0, 3, -1, TerminalCell{});
 
         STD_INSIST(screen->info().cellCapacity == 6);
@@ -468,10 +465,10 @@ STD_TEST_SUITE(Screen) {
         auto sourcePool = ObjPool::fromMemory();
         auto destinationPool = ObjPool::fromMemory();
         Composer& composer = *composerPool->make<Composer>(composerPool.mutPtr());
-        composer.setCellExtras(CellExtraStore::create(composer, 8));
+        composer.extras.replace(CellExtraStore::create(composer.extras, *composer.pool, 8));
         TerminalColors colors;
         configureColors(colors);
-        Screen* screen = Screen::createAlternate(composer, *sourcePool, 1, 4, &colors);
+        Screen* screen = Screen::createAlternate(composer.extras, *sourcePool, 1, 4, &colors);
         const u8 text[] = {'A', 'B', 'C', 'D'};
         for (u16 row = 0; row < 4; ++row) {
             screen->writeAsciiRun(row, 0, text + row, 1, attributes(), 0, 0, TerminalCell{});
@@ -495,10 +492,10 @@ STD_TEST_SUITE(Screen) {
         auto sourcePool = ObjPool::fromMemory();
         auto destinationPool = ObjPool::fromMemory();
         Composer& composer = *composerPool->make<Composer>(composerPool.mutPtr());
-        composer.setCellExtras(CellExtraStore::create(composer, 8));
+        composer.extras.replace(CellExtraStore::create(composer.extras, *composer.pool, 8));
         TerminalColors colors;
         configureColors(colors);
-        Screen* screen = Screen::createPrimary(composer, *sourcePool, 1, 4, &colors, 4);
+        Screen* screen = Screen::createPrimary(composer.extras, *sourcePool, 1, 4, &colors, 4);
         const u8 text[] = {'A', 'B', 'C', 'D'};
         for (u16 row = 0; row < 4; ++row) {
             screen->writeAsciiRun(row, 0, text + row, 1, attributes(), 0, 0, TerminalCell{});
@@ -519,10 +516,10 @@ STD_TEST_SUITE(Screen) {
         auto sourcePool = ObjPool::fromMemory();
         auto destinationPool = ObjPool::fromMemory();
         Composer& composer = *composerPool->make<Composer>(composerPool.mutPtr());
-        composer.setCellExtras(CellExtraStore::create(composer, 8));
+        composer.extras.replace(CellExtraStore::create(composer.extras, *composer.pool, 8));
         TerminalColors colors;
         configureColors(colors);
-        Screen* screen = Screen::createPrimary(composer, *sourcePool, 2, 3, &colors, 4);
+        Screen* screen = Screen::createPrimary(composer.extras, *sourcePool, 2, 3, &colors, 4);
         const u8 first[] = {'1', 'A'};
         const u8 second[] = {'2', 'B'};
         screen->writeAsciiRun(0, 0, first, 2, attributes(), 0, 0, TerminalCell{});
@@ -542,10 +539,10 @@ STD_TEST_SUITE(Screen) {
     STD_TEST(WritesAsciiAndExposesOnlyDamagedCells) {
         auto pool = ObjPool::fromMemory();
         Composer& composer = *pool->make<Composer>(pool.mutPtr());
-        composer.setCellExtras(CellExtraStore::create(composer, 8));
+        composer.extras.replace(CellExtraStore::create(composer.extras, *composer.pool, 8));
         TerminalColors colors;
         configureColors(colors);
-        Screen* screen = Screen::createAlternate(composer, *pool, 4, 2, &colors);
+        Screen* screen = Screen::createAlternate(composer.extras, *pool, 4, 2, &colors);
         TerminalCell attrs = attributes();
         attrs.bold = true;
         const u8 text[] = {'a', 'b'};
@@ -571,10 +568,10 @@ STD_TEST_SUITE(Screen) {
     STD_TEST(DamagedRowReportsWholly) {
         auto pool = ObjPool::fromMemory();
         Composer& composer = *pool->make<Composer>(pool.mutPtr());
-        composer.setCellExtras(CellExtraStore::create(composer, 8));
+        composer.extras.replace(CellExtraStore::create(composer.extras, *composer.pool, 8));
         TerminalColors colors;
         configureColors(colors);
-        Screen* screen = Screen::createAlternate(composer, *pool, 8, 2, &colors);
+        Screen* screen = Screen::createAlternate(composer.extras, *pool, 8, 2, &colors);
         const TerminalCell attrs = attributes();
         const u8 left[] = {'L'};
         const u8 right[] = {'R'};
@@ -601,10 +598,10 @@ STD_TEST_SUITE(Screen) {
     STD_TEST(WritesAsciiLinesAndRecyclesFullHistory) {
         auto pool = ObjPool::fromMemory();
         Composer& composer = *pool->make<Composer>(pool.mutPtr());
-        composer.setCellExtras(CellExtraStore::create(composer, 16));
+        composer.extras.replace(CellExtraStore::create(composer.extras, *composer.pool, 16));
         TerminalColors colors;
         configureColors(colors);
-        Screen* screen = Screen::createPrimary(composer, *pool, 3, 2, &colors, 2);
+        Screen* screen = Screen::createPrimary(composer.extras, *pool, 3, 2, &colors, 2);
         const TerminalCell attrs = attributes();
         const u8 text[] = {'A', 'B', '\r', '\n', 'C', '\r', '\n', 'D', 'E', '\r', '\n', 'F', '\r', '\n'};
         const u16 lengths[] = {2, 1, 2, 1};
@@ -624,10 +621,10 @@ STD_TEST_SUITE(Screen) {
     STD_TEST(WritesAsciiLinesIntoClearedRowsWithEraseAttributes) {
         auto pool = ObjPool::fromMemory();
         Composer& composer = *pool->make<Composer>(pool.mutPtr());
-        composer.setCellExtras(CellExtraStore::create(composer, 16));
+        composer.extras.replace(CellExtraStore::create(composer.extras, *composer.pool, 16));
         TerminalColors colors;
         configureColors(colors);
-        Screen* screen = Screen::createAlternate(composer, *pool, 4, 2, &colors);
+        Screen* screen = Screen::createAlternate(composer.extras, *pool, 4, 2, &colors);
         const TerminalCell attrs = attributes();
         TerminalCell eraseAttrs{};
         eraseAttrs.bold = true;
@@ -647,10 +644,10 @@ STD_TEST_SUITE(Screen) {
     STD_TEST(WritesAsciiLinesWithoutTouchingOtherRows) {
         auto pool = ObjPool::fromMemory();
         Composer& composer = *pool->make<Composer>(pool.mutPtr());
-        composer.setCellExtras(CellExtraStore::create(composer, 16));
+        composer.extras.replace(CellExtraStore::create(composer.extras, *composer.pool, 16));
         TerminalColors colors;
         configureColors(colors);
-        Screen* screen = Screen::createAlternate(composer, *pool, 3, 4, &colors);
+        Screen* screen = Screen::createAlternate(composer.extras, *pool, 3, 4, &colors);
         const TerminalCell attrs = attributes();
         const u8 original[] = {'x', 'y', 'z'};
         const u8 text[] = {'A', '\r', '\n', 'B', '\r', '\n'};
@@ -673,10 +670,10 @@ STD_TEST_SUITE(Screen) {
     STD_TEST(StoresLineAttributesInRowMetadata) {
         auto pool = ObjPool::fromMemory();
         Composer& composer = *pool->make<Composer>(pool.mutPtr());
-        composer.setCellExtras(CellExtraStore::create(composer, 4));
+        composer.extras.replace(CellExtraStore::create(composer.extras, *composer.pool, 4));
         TerminalColors colors;
         configureColors(colors);
-        Screen* screen = Screen::createAlternate(composer, *pool, 4, 1, &colors);
+        Screen* screen = Screen::createAlternate(composer.extras, *pool, 4, 1, &colors);
         TerminalRow rows[1];
 
         screen->setLineAttribute(0, 2);
@@ -691,18 +688,18 @@ STD_TEST_SUITE(Screen) {
     STD_TEST(BlankCaptureUsesSparseRows) {
         auto pool = ObjPool::fromMemory();
         Composer& composer = *pool->make<Composer>(pool.mutPtr());
-        composer.setCellExtras(CellExtraStore::create(composer, 30));
+        composer.extras.replace(CellExtraStore::create(composer.extras, *composer.pool, 30));
         TerminalColors colors;
         configureColors(colors);
-        Screen* screen = Screen::createAlternate(composer, *pool, 10, 3, &colors);
+        Screen* screen = Screen::createAlternate(composer.extras, *pool, 10, 3, &colors);
         TerminalRow rows[3];
-        STD_INSIST(screen->testMaterializedRows() == 0);
+        STD_INSIST(screen->materializedRows() == 0);
 
         screen->expose();
         const size_t count = screen->captureFrame(rows).damagedRows;
 
         STD_INSIST(count == 3);
-        STD_INSIST(screen->testMaterializedRows() == 0);
+        STD_INSIST(screen->materializedRows() == 0);
         for (u16 row = 0; row < 3; ++row) {
             STD_INSIST(rows[row].row == row);
             for (u16 column = 0; column < 10; ++column) {
@@ -716,16 +713,16 @@ STD_TEST_SUITE(Screen) {
         Composer& composer = *composerPool->make<Composer>(composerPool.mutPtr());
         auto sourcePool = ObjPool::fromMemory();
         auto destinationPool = ObjPool::fromMemory();
-        composer.setCellExtras(CellExtraStore::create(composer, 80 * 24));
+        composer.extras.replace(CellExtraStore::create(composer.extras, *composer.pool, 80 * 24));
         TerminalColors colors;
         configureColors(colors);
-        Screen* screen = Screen::createPrimary(composer, *sourcePool, 80, 24, &colors, 50000);
+        Screen* screen = Screen::createPrimary(composer.extras, *sourcePool, 80, 24, &colors, 50000);
         Screen::Cursor cursor{};
-        STD_INSIST(screen->testMaterializedRows() == 0);
+        STD_INSIST(screen->materializedRows() == 0);
 
         screen = screen->resized(*destinationPool, 132, 43, cursor);
 
-        STD_INSIST(screen->testMaterializedRows() == 0);
+        STD_INSIST(screen->materializedRows() == 0);
         STD_INSIST(screen->info().historyRows == 0);
         STD_INSIST(screen->info().columns == 132);
         STD_INSIST(screen->info().rows == 43);
@@ -736,10 +733,10 @@ STD_TEST_SUITE(Screen) {
         Composer& composer = *composerPool->make<Composer>(composerPool.mutPtr());
         auto sourcePool = ObjPool::fromMemory();
         auto destinationPool = ObjPool::fromMemory();
-        composer.setCellExtras(CellExtraStore::create(composer, 6));
+        composer.extras.replace(CellExtraStore::create(composer.extras, *composer.pool, 6));
         TerminalColors colors;
         configureColors(colors);
-        Screen* screen = Screen::createPrimary(composer, *sourcePool, 3, 2, &colors, 4);
+        Screen* screen = Screen::createPrimary(composer.extras, *sourcePool, 3, 2, &colors, 4);
         const u8 first[] = {'A', 'B', 'C'};
         const u8 second[] = {'D', 'E', 'F'};
         screen->writeAsciiRun(0, 0, first, 3, attributes(), 0, 0, TerminalCell{});
@@ -760,10 +757,10 @@ STD_TEST_SUITE(Screen) {
     STD_TEST(TracksProtectedCellsInRowMetadata) {
         auto pool = ObjPool::fromMemory();
         Composer& composer = *pool->make<Composer>(pool.mutPtr());
-        composer.setCellExtras(CellExtraStore::create(composer, 4));
+        composer.extras.replace(CellExtraStore::create(composer.extras, *composer.pool, 4));
         TerminalColors colors;
         configureColors(colors);
-        Screen* screen = Screen::createAlternate(composer, *pool, 4, 1, &colors);
+        Screen* screen = Screen::createAlternate(composer.extras, *pool, 4, 1, &colors);
         TerminalCell attrs = attributes();
         attrs.protected_char = TerminalCell::isoProtection;
         const u8 text[] = {'x'};
@@ -779,10 +776,10 @@ STD_TEST_SUITE(Screen) {
     STD_TEST(ScrollsPartialRectanglesAsOneOperation) {
         auto pool = ObjPool::fromMemory();
         Composer& composer = *pool->make<Composer>(pool.mutPtr());
-        composer.setCellExtras(CellExtraStore::create(composer, 15));
+        composer.extras.replace(CellExtraStore::create(composer.extras, *composer.pool, 15));
         TerminalColors colors;
         configureColors(colors);
-        Screen* screen = Screen::createAlternate(composer, *pool, 5, 3, &colors);
+        Screen* screen = Screen::createAlternate(composer.extras, *pool, 5, 3, &colors);
         const TerminalCell attrs = attributes();
         const u8 first[] = {'A', 'B', 'C', 'D', 'E'};
         const u8 second[] = {'F', 'G', 'H', 'I', 'J'};
@@ -808,10 +805,10 @@ STD_TEST_SUITE(Screen) {
     STD_TEST(PartialRectangleScrollPreservesBlankCellAttributes) {
         auto pool = ObjPool::fromMemory();
         Composer& composer = *pool->make<Composer>(pool.mutPtr());
-        composer.setCellExtras(CellExtraStore::create(composer, 20));
+        composer.extras.replace(CellExtraStore::create(composer.extras, *composer.pool, 20));
         TerminalColors colors;
         configureColors(colors);
-        Screen* screen = Screen::createAlternate(composer, *pool, 10, 4, &colors);
+        Screen* screen = Screen::createAlternate(composer.extras, *pool, 10, 4, &colors);
         TerminalCell red{};
         red.setBackground(CellColor::indexed(1));
         TerminalCell blue{};
@@ -833,10 +830,10 @@ STD_TEST_SUITE(Screen) {
     STD_TEST(PartialRectangleScrollDownPreservesBlankCellAttributes) {
         auto pool = ObjPool::fromMemory();
         Composer& composer = *pool->make<Composer>(pool.mutPtr());
-        composer.setCellExtras(CellExtraStore::create(composer, 20));
+        composer.extras.replace(CellExtraStore::create(composer.extras, *composer.pool, 20));
         TerminalColors colors;
         configureColors(colors);
-        Screen* screen = Screen::createAlternate(composer, *pool, 10, 4, &colors);
+        Screen* screen = Screen::createAlternate(composer.extras, *pool, 10, 4, &colors);
         TerminalCell red{};
         red.setBackground(CellColor::indexed(1));
         TerminalCell blue{};
@@ -858,24 +855,24 @@ STD_TEST_SUITE(Screen) {
     STD_TEST(PartialRectangleScrollKeepsMatchingBlankRowsSparse) {
         auto pool = ObjPool::fromMemory();
         Composer& composer = *pool->make<Composer>(pool.mutPtr());
-        composer.setCellExtras(CellExtraStore::create(composer, 20));
+        composer.extras.replace(CellExtraStore::create(composer.extras, *composer.pool, 20));
         TerminalColors colors;
         configureColors(colors);
-        Screen* screen = Screen::createAlternate(composer, *pool, 10, 4, &colors);
-        STD_INSIST(screen->testMaterializedRows() == 0);
+        Screen* screen = Screen::createAlternate(composer.extras, *pool, 10, 4, &colors);
+        STD_INSIST(screen->materializedRows() == 0);
 
         screen->scrollRectangle(1, 2, 3, 8, -1, TerminalCell{});
 
-        STD_INSIST(screen->testMaterializedRows() == 0);
+        STD_INSIST(screen->materializedRows() == 0);
     }
 
     STD_TEST(PartialScrollUpClearsWideGlyphsAtBothBoundaries) {
         auto pool = ObjPool::fromMemory();
         Composer& composer = *pool->make<Composer>(pool.mutPtr());
-        composer.setCellExtras(CellExtraStore::create(composer, 14));
+        composer.extras.replace(CellExtraStore::create(composer.extras, *composer.pool, 14));
         TerminalColors colors;
         configureColors(colors);
-        Screen* screen = Screen::createAlternate(composer, *pool, 7, 2, &colors);
+        Screen* screen = Screen::createAlternate(composer.extras, *pool, 7, 2, &colors);
         const TerminalCell attrs = attributes();
         constexpr u32 wide = 0x4e00;
         const u8 middle[] = {'x'};
@@ -898,10 +895,10 @@ STD_TEST_SUITE(Screen) {
     STD_TEST(PartialScrollDownClearsWideGlyphsAtBothBoundaries) {
         auto pool = ObjPool::fromMemory();
         Composer& composer = *pool->make<Composer>(pool.mutPtr());
-        composer.setCellExtras(CellExtraStore::create(composer, 14));
+        composer.extras.replace(CellExtraStore::create(composer.extras, *composer.pool, 14));
         TerminalColors colors;
         configureColors(colors);
-        Screen* screen = Screen::createAlternate(composer, *pool, 7, 2, &colors);
+        Screen* screen = Screen::createAlternate(composer.extras, *pool, 7, 2, &colors);
         const TerminalCell attrs = attributes();
         constexpr u32 wide = 0x4e00;
         const u8 middle[] = {'x'};
@@ -924,10 +921,10 @@ STD_TEST_SUITE(Screen) {
     STD_TEST(PartialScrollCarriesProtectionWhileRepairingWideSourceEdges) {
         auto pool = ObjPool::fromMemory();
         Composer& composer = *pool->make<Composer>(pool.mutPtr());
-        composer.setCellExtras(CellExtraStore::create(composer, 14));
+        composer.extras.replace(CellExtraStore::create(composer.extras, *composer.pool, 14));
         TerminalColors colors;
         configureColors(colors);
-        Screen* screen = Screen::createAlternate(composer, *pool, 7, 2, &colors);
+        Screen* screen = Screen::createAlternate(composer.extras, *pool, 7, 2, &colors);
         const TerminalCell attrs = attributes();
         TerminalCell protectedAttrs = attrs;
         protectedAttrs.protected_char = TerminalCell::isoProtection;
@@ -954,10 +951,10 @@ STD_TEST_SUITE(Screen) {
     STD_TEST(RotatesMultipleRowsInOnePass) {
         auto pool = ObjPool::fromMemory();
         Composer& composer = *pool->make<Composer>(pool.mutPtr());
-        composer.setCellExtras(CellExtraStore::create(composer, 5));
+        composer.extras.replace(CellExtraStore::create(composer.extras, *composer.pool, 5));
         TerminalColors colors;
         configureColors(colors);
-        Screen* screen = Screen::createAlternate(composer, *pool, 1, 5, &colors);
+        Screen* screen = Screen::createAlternate(composer.extras, *pool, 1, 5, &colors);
         const TerminalCell attrs = attributes();
         for (u16 row = 0; row < 5; ++row) {
             const u8 value = (u8)('A' + row);
@@ -978,10 +975,10 @@ STD_TEST_SUITE(Screen) {
     STD_TEST(InsertsAsciiRunsWithOneRowShift) {
         auto pool = ObjPool::fromMemory();
         Composer& composer = *pool->make<Composer>(pool.mutPtr());
-        composer.setCellExtras(CellExtraStore::create(composer, 5));
+        composer.extras.replace(CellExtraStore::create(composer.extras, *composer.pool, 5));
         TerminalColors colors;
         configureColors(colors);
-        Screen* screen = Screen::createAlternate(composer, *pool, 5, 1, &colors);
+        Screen* screen = Screen::createAlternate(composer.extras, *pool, 5, 1, &colors);
         const TerminalCell attrs = attributes();
         const u8 initial[] = {'a', 'b', 'c', 'd', 'e'};
         const u8 inserted[] = {'X', 'Y'};
@@ -998,10 +995,10 @@ STD_TEST_SUITE(Screen) {
     STD_TEST(OverwritingWideContinuationClearsItsLead) {
         auto pool = ObjPool::fromMemory();
         Composer& composer = *pool->make<Composer>(pool.mutPtr());
-        composer.setCellExtras(CellExtraStore::create(composer, 4));
+        composer.extras.replace(CellExtraStore::create(composer.extras, *composer.pool, 4));
         TerminalColors colors;
         configureColors(colors);
-        Screen* screen = Screen::createAlternate(composer, *pool, 4, 1, &colors);
+        Screen* screen = Screen::createAlternate(composer.extras, *pool, 4, 1, &colors);
         const TerminalCell attrs = attributes();
         constexpr u32 wide = 0x4e00;
         const u8 replacement[] = {'x'};
@@ -1021,10 +1018,10 @@ STD_TEST_SUITE(Screen) {
     STD_TEST(InsertAndDeleteCellsPreserveWideGlyph) {
         auto pool = ObjPool::fromMemory();
         Composer& composer = *pool->make<Composer>(pool.mutPtr());
-        composer.setCellExtras(CellExtraStore::create(composer, 16));
+        composer.extras.replace(CellExtraStore::create(composer.extras, *composer.pool, 16));
         TerminalColors colors;
         configureColors(colors);
-        Screen* screen = Screen::createAlternate(composer, *pool, 8, 1, &colors);
+        Screen* screen = Screen::createAlternate(composer.extras, *pool, 8, 1, &colors);
         const TerminalCell attrs = attributes();
         constexpr u32 wide = 0x4e00;
         const u8 text[] = {'a', 'b'};
@@ -1049,10 +1046,10 @@ STD_TEST_SUITE(Screen) {
     STD_TEST(InsertInsideWideGlyphRemovesBothHalves) {
         auto pool = ObjPool::fromMemory();
         Composer& composer = *pool->make<Composer>(pool.mutPtr());
-        composer.setCellExtras(CellExtraStore::create(composer, 8));
+        composer.extras.replace(CellExtraStore::create(composer.extras, *composer.pool, 8));
         TerminalColors colors;
         configureColors(colors);
-        Screen* screen = Screen::createAlternate(composer, *pool, 4, 1, &colors);
+        Screen* screen = Screen::createAlternate(composer.extras, *pool, 4, 1, &colors);
         const TerminalCell attrs = attributes();
         constexpr u32 wide = 0x4e00;
         screen->writeCodepoint(0, 1, wide, true, attrs, 0, 0, TerminalCell{});
@@ -1069,10 +1066,10 @@ STD_TEST_SUITE(Screen) {
     STD_TEST(ScrollbackRetainsRowsAndChangesView) {
         auto pool = ObjPool::fromMemory();
         Composer& composer = *pool->make<Composer>(pool.mutPtr());
-        composer.setCellExtras(CellExtraStore::create(composer, 8));
+        composer.extras.replace(CellExtraStore::create(composer.extras, *composer.pool, 8));
         TerminalColors colors;
         configureColors(colors);
-        Screen* screen = Screen::createPrimary(composer, *pool, 2, 3, &colors, 1);
+        Screen* screen = Screen::createPrimary(composer.extras, *pool, 2, 3, &colors, 1);
         const TerminalCell attrs = attributes();
         const u8 first[] = {'A'};
         const u8 second[] = {'B'};
@@ -1101,10 +1098,10 @@ STD_TEST_SUITE(Screen) {
     STD_TEST(FullHistoryRingKeepsNewestRowsAndRestoresThem) {
         auto pool = ObjPool::fromMemory();
         Composer& composer = *pool->make<Composer>(pool.mutPtr());
-        composer.setCellExtras(CellExtraStore::create(composer, 8));
+        composer.extras.replace(CellExtraStore::create(composer.extras, *composer.pool, 8));
         TerminalColors colors;
         configureColors(colors);
-        Screen* screen = Screen::createPrimary(composer, *pool, 2, 2, &colors, 2);
+        Screen* screen = Screen::createPrimary(composer.extras, *pool, 2, 2, &colors, 2);
         const TerminalCell attrs = attributes();
         const u8 first[] = {'A'};
         const u8 second[] = {'B'};
@@ -1137,10 +1134,10 @@ STD_TEST_SUITE(Screen) {
     STD_TEST(TopAnchoredPartialScrollPreservesRowsBelowRegion) {
         auto pool = ObjPool::fromMemory();
         Composer& composer = *pool->make<Composer>(pool.mutPtr());
-        composer.setCellExtras(CellExtraStore::create(composer, 8));
+        composer.extras.replace(CellExtraStore::create(composer.extras, *composer.pool, 8));
         TerminalColors colors;
         configureColors(colors);
-        Screen* screen = Screen::createPrimary(composer, *pool, 2, 4, &colors, 2);
+        Screen* screen = Screen::createPrimary(composer.extras, *pool, 2, 4, &colors, 2);
         const TerminalCell attrs = attributes();
         const u8 first[] = {'A'};
         const u8 second[] = {'B'};
@@ -1168,12 +1165,12 @@ STD_TEST_SUITE(Screen) {
     STD_TEST(ReturnsExplicitAndDetectedHyperlinks) {
         auto pool = ObjPool::fromMemory();
         Composer& composer = *pool->make<Composer>(pool.mutPtr());
-        composer.setCellExtras(CellExtraStore::create(composer, 64));
+        composer.extras.replace(CellExtraStore::create(composer.extras, *composer.pool, 64));
         TerminalColors colors;
         configureColors(colors);
-        Screen* screen = Screen::createAlternate(composer, *pool, 32, 2, &colors);
+        Screen* screen = Screen::createAlternate(composer.extras, *pool, 32, 2, &colors);
         const TerminalCell attrs = attributes();
-        const u32 link = composer.cellExtras->getOrCreateHyperlink(StringView(u8"id"), StringView(u8"https://explicit.test"), 17);
+        const u32 link = composer.extras.store->getOrCreateHyperlink(StringView(u8"id"), StringView(u8"https://explicit.test"), 17);
         const u8 explicitText[] = {'x'};
         const u8 detected[] = {'s', 'e', 'e', ' ', 'h', 't', 't', 'p', 's', ':', '/', '/', 'e', 'x', 'a', 'm', 'p', 'l', 'e', '.', 't', 'e', 's', 't', ',', ' ', 'n', 'o', 'w'};
         screen->writeAsciiRun(0, 0, explicitText, 1, attrs, link, 0, TerminalCell{});
@@ -1194,15 +1191,15 @@ STD_TEST_SUITE(Screen) {
     STD_TEST(CollectsSentinelEncodedExtraCells) {
         auto pool = ObjPool::fromMemory();
         Composer& composer = *pool->make<Composer>(pool.mutPtr());
-        composer.setCellExtras(CellExtraStore::create(composer, 16));
+        composer.extras.replace(CellExtraStore::create(composer.extras, *composer.pool, 16));
         TerminalColors colors;
         configureColors(colors);
-        Screen* screen = Screen::createAlternate(composer, *pool, 4, 1, &colors);
+        Screen* screen = Screen::createAlternate(composer.extras, *pool, 4, 1, &colors);
         TerminalCell ordinary = attributes();
         ordinary.setInlineUnderlineColor(CellColor::direct({TerminalCell::extraRefSentinel, 1, 2}));
         const u8 filler[] = {'a', 'b', 'c', 'd'};
         screen->writeAsciiRun(0, 0, filler, 4, ordinary, 0, 0, TerminalCell{});
-        const u32 link = composer.cellExtras->getOrCreateHyperlink(StringView(u8"id"), StringView(u8"https://sentinel.test"), 1);
+        const u32 link = composer.extras.store->getOrCreateHyperlink(StringView(u8"id"), StringView(u8"https://sentinel.test"), 1);
         const u8 first[] = {'x'};
         const u8 last[] = {'y'};
         screen->writeAsciiRun(0, 0, first, 1, attributes(), link, 0, TerminalCell{});
@@ -1223,10 +1220,10 @@ STD_TEST_SUITE(Screen) {
         auto sourcePool = ObjPool::fromMemory();
         auto destinationPool = ObjPool::fromMemory();
         Composer& composer = *composerPool->make<Composer>(composerPool.mutPtr());
-        composer.setCellExtras(CellExtraStore::create(composer, 8));
+        composer.extras.replace(CellExtraStore::create(composer.extras, *composer.pool, 8));
         TerminalColors colors;
         configureColors(colors);
-        Screen* screen = Screen::createAlternate(composer, *sourcePool, 4, 2, &colors);
+        Screen* screen = Screen::createAlternate(composer.extras, *sourcePool, 4, 2, &colors);
         const TerminalCell attrs = attributes();
         const u8 text[] = {'a', 'b', 'c'};
         screen->writeAsciiRun(0, 0, text, 3, attrs, 0, 0, TerminalCell{});
@@ -1242,10 +1239,10 @@ STD_TEST_SUITE(Screen) {
     STD_TEST(FindsBlinkingTextInVisibleCells) {
         auto pool = ObjPool::fromMemory();
         Composer& composer = *pool->make<Composer>(pool.mutPtr());
-        composer.setCellExtras(CellExtraStore::create(composer, 4));
+        composer.extras.replace(CellExtraStore::create(composer.extras, *composer.pool, 4));
         TerminalColors colors;
         configureColors(colors);
-        Screen* screen = Screen::createAlternate(composer, *pool, 2, 2, &colors);
+        Screen* screen = Screen::createAlternate(composer.extras, *pool, 2, 2, &colors);
         TerminalCell attrs = attributes();
 
         STD_INSIST(!screen->hasBlinkingText());
@@ -1372,10 +1369,10 @@ STD_TEST_SUITE(Screen) {
     STD_TEST(ChangeRectangleAttributesAppliesFullSgrState) {
         auto pool = ObjPool::fromMemory();
         Composer& composer = *pool->make<Composer>(pool.mutPtr());
-        composer.setCellExtras(CellExtraStore::create(composer, 12));
+        composer.extras.replace(CellExtraStore::create(composer.extras, *composer.pool, 12));
         TerminalColors colors;
         configureColors(colors);
-        Screen* screen = Screen::createPrimary(composer, *pool, 4, 3, &colors, 0);
+        Screen* screen = Screen::createPrimary(composer.extras, *pool, 4, 3, &colors, 0);
         TerminalCell initial = attributes();
         initial.faint = true;
         initial.setInlineUnderlineColor(CellColor::indexed(6));
@@ -1404,7 +1401,7 @@ STD_TEST_SUITE(Screen) {
                 STD_INSIST(cell.overline);
                 STD_INSIST(cell.foreground() == CellColor::indexed(10));
                 STD_INSIST(cell.background() == CellColor::direct({1, 2, 3}));
-                STD_INSIST(composer.cellExtras->underlineColor(cell) == CellColor::direct({4, 5, 6}));
+                STD_INSIST(composer.extras.store->underlineColor(cell) == CellColor::direct({4, 5, 6}));
             }
         }
     }
@@ -1412,10 +1409,10 @@ STD_TEST_SUITE(Screen) {
     STD_TEST(ChangeRectangleAttributesCanResetEveryVisualAttribute) {
         auto pool = ObjPool::fromMemory();
         Composer& composer = *pool->make<Composer>(pool.mutPtr());
-        composer.setCellExtras(CellExtraStore::create(composer, 1));
+        composer.extras.replace(CellExtraStore::create(composer.extras, *composer.pool, 1));
         TerminalColors colors;
         configureColors(colors);
-        Screen* screen = Screen::createPrimary(composer, *pool, 1, 1, &colors, 0);
+        Screen* screen = Screen::createPrimary(composer.extras, *pool, 1, 1, &colors, 0);
         TerminalCell initial = attributes();
         initial.bold = true;
         initial.faint = true;
@@ -1444,7 +1441,7 @@ STD_TEST_SUITE(Screen) {
         STD_INSIST(!(cell.bold || cell.faint || cell.italic || cell.underline_style || cell.blink || cell.inverse || cell.conceal || cell.strike || cell.overline));
         STD_INSIST(cell.foreground() == CellColor::defaultForeground());
         STD_INSIST(cell.background() == CellColor::defaultBackground());
-        STD_INSIST(composer.cellExtras->underlineColor(cell) == CellColor::defaultForeground());
+        STD_INSIST(composer.extras.store->underlineColor(cell) == CellColor::defaultForeground());
     }
 
     STD_TEST(CollectExtraCellsProducesValidIncrementalUpdate) {
@@ -1615,16 +1612,16 @@ STD_TEST_SUITE(Screen) {
         auto composerPool = ObjPool::fromMemory();
         ObjPool::Ref screenPool = ObjPool::fromMemory();
         Composer& composer = *composerPool->make<Composer>(composerPool.mutPtr());
-        composer.setCellExtras(CellExtraStore::create(composer, 4096));
+        composer.extras.replace(CellExtraStore::create(composer.extras, *composer.pool, 4096));
         TerminalColors colors;
         configureColors(colors);
-        Screen* screen = Screen::createAlternate(composer, *screenPool, 8, 5, &colors);
+        Screen* screen = Screen::createAlternate(composer.extras, *screenPool, 8, 5, &colors);
         SlowScreenModel model(8, 5);
         DamageCanvas incremental;
         renderFull(*screen, colors, incremental);
         const u32 links[]{
-            composer.cellExtras->getOrCreateHyperlink(StringView(u8"one"), StringView(u8"https://one.test"), 1),
-            composer.cellExtras->getOrCreateHyperlink(StringView(u8"two"), StringView(u8"https://two.test"), 2),
+            composer.extras.store->getOrCreateHyperlink(StringView(u8"one"), StringView(u8"https://one.test"), 1),
+            composer.extras.store->getOrCreateHyperlink(StringView(u8"two"), StringView(u8"https://two.test"), 2),
         };
         u32 random = 0xc0ffee42u;
 
@@ -1647,7 +1644,7 @@ STD_TEST_SUITE(Screen) {
                 expected.drawn = 1;
                 expected.semantic = semantic;
                 if (hyperlink != 0) {
-                    composer.cellExtras->setHyperlink(expected, hyperlink);
+                    composer.extras.store->setHyperlink(expected, hyperlink);
                 }
                 model.at(row, column) = expected;
             } else if (operation == 1) {
@@ -1717,292 +1714,3 @@ STD_TEST_SUITE(Screen) {
         }
     }
 }
-
-#if defined(HAVE_FREETYPE) && defined(HAVE_HARFBUZZ)
-namespace {
-    // A pictogram the embedded nerd font covers.
-    static constexpr u32 shapeIcon = 0xe606;
-
-    struct ShapeFixture {
-        ShapeFixture();
-
-        void writeText(Screen& screen, u16 row, u16 column, const char* text);
-
-        ObjPool::Ref pool = ObjPool::fromMemory();
-        TerminalColors colors;
-        Composer* composer = nullptr;
-        Screen* screen = nullptr;
-    };
-}
-
-ShapeFixture::ShapeFixture() {
-    configureColors(colors);
-    composer = pool->make<Composer>(pool.mutPtr());
-    // Only the embedded resolver: the tests must not depend on system
-    // fonts.
-    while (!composer->fontResolvers.empty()) {
-        composer->fontResolvers.popFront();
-    }
-    composer->fontResolvers.pushBack(createEmbeddedFontResolver(*composer));
-    composer->fonts = Fontpack::create(*composer, *pool, nullptr, 0, 16);
-    screen = Screen::createPrimary(*composer, *pool, 16, 4, &colors, 8);
-}
-
-void ShapeFixture::writeText(Screen& screen_, u16 row, u16 column, const char* text) {
-    const TerminalCell attrs = attributes();
-    for (size_t index = 0; text[index] != 0; ++index) {
-        const u32 codepoint = (u32)(u8)(text[index]);
-        screen_.writeGrapheme(row, (u16)(column + index), &codepoint, 1, false, attrs, 0, 0, attrs);
-    }
-}
-
-STD_TEST_SUITE(ScreenRowSpans) {
-    STD_TEST(PlainTextIsOneSpanWithInk) {
-        ShapeFixture fx;
-        fx.writeText(*fx.screen, 0, 0, "abc");
-        ScreenRowSpan spans[16];
-        const size_t count = fx.screen->rowSpans(0, spans);
-        STD_INSIST(count == 1);
-        // Three letters and the blank behind them, which the span takes
-        // as the canvas for whatever ink crosses its last cell.
-        STD_INSIST(spans[0].begin == 0 && spans[0].end == 4);
-        STD_INSIST(!spans[0].color && !spans[0].missing);
-        const u16 width = fx.composer->fonts->getPx();
-        const u16 height = fx.composer->fonts->getPy();
-        const size_t stride = (size_t)(spans[0].end - spans[0].begin) * width;
-        const u8* const arena = fx.screen->spanMask();
-        bool ink = false;
-        for (u16 row = 0; row < height && !ink; ++row) {
-            for (size_t x = 0; x < stride && !ink; ++x) {
-                ink = arena[spans[0].offset + (size_t)(row) * stride + x] > 64;
-            }
-        }
-        STD_INSIST(ink);
-    }
-
-    STD_TEST(BlanksSplitSpansAndDedupRepeats) {
-        ShapeFixture fx;
-        fx.writeText(*fx.screen, 0, 0, "ab ab");
-        ScreenRowSpan spans[16];
-        const size_t count = fx.screen->rowSpans(0, spans);
-        STD_INSIST(count == 2);
-        // A blank still cuts, and each word takes exactly one of them:
-        // "ab " twice, which is why both intern the same strip.
-        STD_INSIST(spans[0].begin == 0 && spans[0].end == 3);
-        STD_INSIST(spans[1].begin == 3 && spans[1].end == 6);
-        STD_INSIST(spans[0].offset == spans[1].offset);
-    }
-
-    STD_TEST(MutationReshapesTheRow) {
-        ShapeFixture fx;
-        fx.writeText(*fx.screen, 0, 0, "ab");
-        ScreenRowSpan spans[16];
-        STD_INSIST(fx.screen->rowSpans(0, spans) == 1);
-        fx.writeText(*fx.screen, 0, 2, "c");
-        const size_t count = fx.screen->rowSpans(0, spans);
-        STD_INSIST(count == 1);
-        STD_INSIST(spans[0].end == 4);
-    }
-
-    STD_TEST(IconCapturesOneBlank) {
-        ShapeFixture fx;
-        const TerminalCell attrs = attributes();
-        const u32 icon = shapeIcon;
-        fx.screen->writeGrapheme(0, 0, &icon, 1, false, attrs, 0, 0, attrs);
-        fx.writeText(*fx.screen, 0, 2, "x");
-        ScreenRowSpan spans[16];
-        const size_t count = fx.screen->rowSpans(0, spans);
-        STD_INSIST(count == 2);
-        STD_INSIST(spans[0].begin == 0 && spans[0].end == 2);
-        STD_INSIST(spans[1].begin == 2 && spans[1].end == 4);
-    }
-
-    STD_TEST(AdjacentIconsCaptureOneBlankBetweenThem) {
-        // Two icons are one span, and it takes a single blank behind it
-        // like any other - the pictogram rule is the general rule now.
-        ShapeFixture fx;
-        const TerminalCell attrs = attributes();
-        const u32 icon = shapeIcon;
-        fx.screen->writeGrapheme(0, 0, &icon, 1, false, attrs, 0, 0, attrs);
-        fx.screen->writeGrapheme(0, 1, &icon, 1, false, attrs, 0, 0, attrs);
-        ScreenRowSpan spans[16];
-        const size_t count = fx.screen->rowSpans(0, spans);
-        STD_INSIST(count == 1);
-        STD_INSIST(spans[0].begin == 0 && spans[0].end == 3);
-    }
-
-    STD_TEST(ADifferentlyPaintedBlankIsNotCaptured) {
-        // The strip is a mask: ink crossing into the captured cell takes
-        // that cell's colors, so a blank that would paint it differently
-        // stays outside the span. Shaping attributes are another matter -
-        // see BoldBlankIsStillCaptured.
-        ShapeFixture fx;
-        TerminalCell attrs = attributes();
-        const u32 letter = 'w';
-        fx.screen->writeGrapheme(0, 0, &letter, 1, false, attrs, 0, 0, attrs);
-        TerminalCell other = attrs;
-        other.setForeground(CellColor::indexed(1));
-        const u32 blank = ' ';
-        fx.screen->writeGrapheme(0, 1, &blank, 1, false, other, 0, 0, other);
-        ScreenRowSpan spans[16];
-        const size_t count = fx.screen->rowSpans(0, spans);
-        STD_INSIST(count == 1);
-        STD_INSIST(spans[0].begin == 0 && spans[0].end == 1);
-    }
-
-    STD_TEST(BoldBlankIsStillCaptured) {
-        // A blank shapes to nothing, so the attributes that only pick a
-        // face cannot keep it out of the span: the ink of the run before
-        // it lands in it either way.
-        ShapeFixture fx;
-        TerminalCell attrs = attributes();
-        const u32 letter = 'w';
-        fx.screen->writeGrapheme(0, 0, &letter, 1, false, attrs, 0, 0, attrs);
-        TerminalCell bolder = attrs;
-        bolder.bold = 1;
-        const u32 blank = ' ';
-        fx.screen->writeGrapheme(0, 1, &blank, 1, false, bolder, 0, 0, bolder);
-        ScreenRowSpan spans[16];
-        const size_t count = fx.screen->rowSpans(0, spans);
-        STD_INSIST(count == 1);
-        STD_INSIST(spans[0].begin == 0 && spans[0].end == 2);
-    }
-
-    STD_TEST(BlankRowHasNoSpans) {
-        ShapeFixture fx;
-        ScreenRowSpan spans[16];
-        STD_INSIST(fx.screen->rowSpans(0, spans) == 0);
-    }
-
-    STD_TEST(ExtrasStoreReplacementKeepsStrips) {
-        ShapeFixture fx;
-        fx.writeText(*fx.screen, 0, 0, "abc");
-        ScreenRowSpan spans[16];
-        STD_INSIST(fx.screen->rowSpans(0, spans) == 1);
-        const u32 offset = spans[0].offset;
-        const size_t used = fx.screen->spanMaskUsed();
-        // Replacing the store voids the raw-bytes cache level. Mutate the
-        // row so it reshapes: the strip must come back through the
-        // materialized level without growing the arena.
-        fx.composer->setCellExtras(CellExtraStore::create(*fx.composer, 64));
-        fx.writeText(*fx.screen, 0, 0, "abc");
-        STD_INSIST(fx.screen->rowSpans(0, spans) == 1);
-        STD_INSIST(spans[0].offset == offset);
-        STD_INSIST(fx.screen->spanMaskUsed() == used);
-    }
-
-    STD_TEST(FontChangeResetsStrips) {
-        ShapeFixture fx;
-        fx.writeText(*fx.screen, 0, 0, "abc");
-        ScreenRowSpan spans[16];
-        STD_INSIST(fx.screen->rowSpans(0, spans) == 1);
-        STD_INSIST(fx.screen->spanMaskUsed() != 0);
-        for (IntrusiveNode* node = fx.composer->fontChangedListeners.mutFront(); node != fx.composer->fontChangedListeners.mutEnd();) {
-            Listener* const listener = static_cast<Listener*>(node);
-            node = node->next;
-            listener->onListen();
-        }
-        STD_INSIST(fx.screen->spanMaskUsed() == 0);
-        STD_INSIST(fx.screen->rowSpans(0, spans) == 1);
-        STD_INSIST(fx.screen->spanMaskUsed() != 0);
-    }
-
-    STD_TEST(ArenaOverflowCollectsToLiveStrips) {
-        ShapeFixture fx;
-        ScreenRowSpan spans[16];
-        const size_t budget = 3u * 16 * 4 * fx.composer->fonts->getPx() * fx.composer->fonts->getPy();
-        const u32 before = fx.screen->spanGeneration();
-        // Churn one row with unique content: every reshape appends a new
-        // strip, the previous becomes garbage. The arena must stay under
-        // its budget by collecting down to the visible strips, and the
-        // final content must render correctly from the moved offsets.
-        char text[8];
-        for (u32 round = 0; round < 400; ++round) {
-            text[0] = (char)('a' + round % 26);
-            text[1] = (char)('a' + (round / 26) % 26);
-            text[2] = (char)('0' + round % 10);
-            text[3] = 0;
-            fx.writeText(*fx.screen, 1, 0, text);
-            STD_INSIST(fx.screen->rowSpans(1, spans) >= 1);
-        }
-        STD_INSIST(fx.screen->spanMaskUsed() <= budget);
-        STD_INSIST(fx.screen->spanGeneration() > before);
-        const size_t count = fx.screen->rowSpans(1, spans);
-        STD_INSIST(count == 1);
-        STD_INSIST(spans[0].begin == 0 && spans[0].end == 4);
-        STD_INSIST(spans[0].offset + (size_t)(4) * fx.composer->fonts->getPx() * fx.composer->fonts->getPy() <= fx.screen->spanMaskUsed());
-    }
-
-    STD_TEST(LigatureFormsAcrossCells) {
-        ShapeFixture fx;
-        Fontpack& fonts = *fx.composer->fonts;
-        const u32 arrow[] = {'-', '>'};
-        Font* const face = fonts.resolveFace(arrow, 1);
-        STD_INSIST(face != nullptr && !face->colored());
-        const u16 width = fonts.getPx();
-        const u16 height = fonts.getPy();
-        const size_t strip = (size_t)(2) * width * height;
-        Buffer shaped;
-        shaped.grow(strip);
-        shaped.seekAbsolute(strip);
-        shaped.zero(strip);
-        face->render(arrow, 2, 2, shaped.mutData());
-
-        // The same two codepoints rendered as isolated cells: the shaped
-        // strip must differ - the arrow ligature replaced them.
-        Buffer isolated;
-        isolated.grow(strip);
-        isolated.seekAbsolute(strip);
-        isolated.zero(strip);
-        Buffer glyph;
-        glyph.grow((size_t)(width)*height);
-        for (u16 cell = 0; cell < 2; ++cell) {
-            glyph.seekAbsolute((size_t)(width)*height);
-            glyph.zero((size_t)(width)*height);
-            face->render(&arrow[cell], 1, 1, glyph.mutData());
-            for (u16 row = 0; row < height; ++row) {
-                __builtin_memcpy((u8*)(isolated.mutData()) + (size_t)(row) * 2 * width + (size_t)(cell)*width, (const u8*)(glyph.data()) + (size_t)(row)*width, width);
-            }
-        }
-        size_t shapedInk = 0;
-        size_t isolatedInk = 0;
-        bool differ = false;
-        for (size_t index = 0; index < strip; ++index) {
-            shapedInk += ((const u8*)(shaped.data()))[index] > 8;
-            isolatedInk += ((const u8*)(isolated.data()))[index] > 8;
-            differ = differ || ((const u8*)(shaped.data()))[index] != ((const u8*)(isolated.data()))[index];
-        }
-        STD_INSIST(shapedInk != 0);
-        STD_INSIST(isolatedInk != 0);
-        STD_INSIST(differ);
-    }
-
-    STD_TEST(ScreensNeverShareASpanGeneration) {
-        // The primary and alternate screens carry separate arenas, and a
-        // resize builds a fresh screen: a renderer keying device copies
-        // on the generation must never see two arenas under one value.
-        ShapeFixture fx;
-        Screen* const other = Screen::createPrimary(*fx.composer, *fx.pool, 16, 4, &fx.colors, 8);
-        STD_INSIST(fx.screen->spanGeneration() != other->spanGeneration());
-        Screen::Cursor cursor;
-        Screen* const resized = other->resized(*fx.pool, 20, 5, cursor);
-        STD_INSIST(resized->spanGeneration() != other->spanGeneration());
-        STD_INSIST(resized->spanGeneration() != fx.screen->spanGeneration());
-    }
-
-    STD_TEST(ScrollIntoHistoryDropsShapesAndReshapesOnView) {
-        ShapeFixture fx;
-        fx.writeText(*fx.screen, 0, 0, "abc");
-        ScreenRowSpan spans[16];
-        STD_INSIST(fx.screen->rowSpans(0, spans) == 1);
-        const TerminalCell attrs = attributes();
-        fx.screen->scrollRows(0, 4, -1, attrs);
-        // The shaped row is history now; scrolling the view back reshapes
-        // it on demand with the same strip.
-        STD_INSIST(fx.screen->scrollView(1));
-        const size_t count = fx.screen->rowSpans(0, spans);
-        STD_INSIST(count == 1);
-        STD_INSIST(spans[0].begin == 0 && spans[0].end == 4);
-    }
-}
-#endif

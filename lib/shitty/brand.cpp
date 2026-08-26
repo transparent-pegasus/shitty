@@ -6,8 +6,8 @@
 
 #include "brand.h"
 
-#include "color.h"
-#include "fatal.h"
+#include <lib/vterm/color.h>
+#include <lib/vterm/fatal.h>
 
 #include <std/str/builder.h>
 #include <std/sys/crt.h>

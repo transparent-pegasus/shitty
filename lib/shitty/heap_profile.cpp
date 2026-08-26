@@ -6,8 +6,8 @@
 
 #include "heap_profile.h"
 
-#include "fatal.h"
-#include "num.h"
+#include <lib/vterm/fatal.h>
+#include <lib/vterm/num.h>
 
 #include <std/ios/out_fd.h>
 #include <std/str/builder.h>

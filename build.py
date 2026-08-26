@@ -66,7 +66,9 @@ def add_test(*targets, instrumented=True):
             group("instrumented-test", target)
 
 
-build.includes += ["$(B)", "$(S)/lib/shitty", "$(S)/ext"]
+# $(S) serves the full-path form cross-library includes use:
+# lib/shitty reaches the VT core as <lib/vterm/...>.
+build.includes += ["$(B)", "$(S)", "$(S)/lib/shitty", "$(S)/ext"]
 build.cppflags += [f'-DSHITTY_VERSION="{shitty_version}"']
 # libstd needs -std=c++26, which the Apple command-line-tools clang does
 # not know; fail here with directions instead of deep inside the graph.
@@ -90,6 +92,8 @@ build.cxxflags += [
     "-Og" if "-DDEBUG" in build.cppflags else "-O2",
 ]
 production_path_flags = [
+    "-ffile-prefix-map=$(S)/lib/vterm=lib/vterm",
+    "-ffile-prefix-map=$(S)/lib/embed=lib/embed",
     "-ffile-prefix-map=$(S)/lib/shitty=lib",
     "-ffile-prefix-map=$(S)/bin=bin",
     "-ffile-prefix-map=$(S)/ext=ext",
@@ -407,12 +411,12 @@ totality_deps = []
 if ragel_is_6:
     parser_totality = command(
         name="parser_totality",
-        inputs=["$(S)/lib/shitty/parser.rl", "$(S)/lib/shitty/check_parser_totality.py"],
+        inputs=["$(S)/lib/vterm/parser.rl", "$(S)/lib/vterm/check_parser_totality.py"],
         outputs=["$(B)/parser.rl.total"],
         cmd=[
             "python3",
-            "$(S)/lib/shitty/check_parser_totality.py",
-            "$(S)/lib/shitty/parser.rl",
+            "$(S)/lib/vterm/check_parser_totality.py",
+            "$(S)/lib/vterm/parser.rl",
             "$(B)/parser.rl.total",
         ],
         descr="RG",
@@ -422,7 +426,7 @@ if ragel_is_6:
 
 parser_prod = command(
     name="parser_prod",
-    inputs=["$(S)/lib/shitty/parser.rl"],
+    inputs=["$(S)/lib/vterm/parser.rl"],
     outputs=["$(B)/parser.rl.h"],
     deps=totality_deps,
     cmd=[
@@ -430,14 +434,14 @@ parser_prod = command(
         *ragel_prod_flags,
         "-o",
         "$(B)/parser.rl.h",
-        "$(S)/lib/shitty/parser.rl",
+        "$(S)/lib/vterm/parser.rl",
     ],
     descr="RG",
     color="magenta",
 )
 
 unicode_data_inputs = [
-    "$(S)/lib/shitty/unicode_data.py",
+    "$(S)/lib/vterm/unicode_data.py",
     "$(S)/ext/unicode/DerivedCoreProperties-17.0.0.txt",
     "$(S)/ext/unicode/DerivedGeneralCategory-17.0.0.txt",
     "$(S)/ext/unicode/EastAsianWidth-8.0.0.txt",
@@ -454,7 +458,7 @@ unicode_data = command(
     outputs=["$(B)/unicode_data.h"],
     cmd=[
         "python3",
-        "$(S)/lib/shitty/unicode_data.py",
+        "$(S)/lib/vterm/unicode_data.py",
         "$(S)/ext/unicode",
         "$(B)/unicode_data.h",
     ],
@@ -482,7 +486,7 @@ toml_prod = command(
 
 parser_test = command(
     name="parser_test",
-    inputs=["$(S)/lib/shitty/parser.rl"],
+    inputs=["$(S)/lib/vterm/parser.rl"],
     outputs=["$(B)/parser_test.rl.h"],
     deps=totality_deps,
     cmd=[
@@ -490,7 +494,7 @@ parser_test = command(
         *ragel_test_flags,
         "-o",
         "$(B)/parser_test.rl.h",
-        "$(S)/lib/shitty/parser.rl",
+        "$(S)/lib/vterm/parser.rl",
     ],
     descr="RG",
     color="magenta",
@@ -499,11 +503,11 @@ parser_test = command(
 
 utf8_dfa = command(
     name="utf8_dfa",
-    inputs=["$(S)/lib/shitty/generate_utf8_dfa.py"],
+    inputs=["$(S)/lib/vterm/generate_utf8_dfa.py"],
     outputs=["$(B)/utf8_dfa.h"],
     cmd=[
         "python3",
-        "$(S)/lib/shitty/generate_utf8_dfa.py",
+        "$(S)/lib/vterm/generate_utf8_dfa.py",
         "$(B)/utf8_dfa.h",
     ],
     descr="DF",
@@ -662,11 +666,11 @@ shitty_main_source = "$(S)/bin/st/main.cpp"
 pretty_main_source = "$(S)/bin/pt/main.cpp"
 fuzz_source = "$(S)/bin/main_fuzz/main.cpp"
 heap_profile_source = "$(S)/lib/shitty/heap_profile.cpp"
-parser_source = "$(S)/lib/shitty/parser.cpp"
+parser_source = "$(S)/lib/vterm/parser.cpp"
 toml_source = "$(S)/lib/shitty/toml.cpp"
 toml_dump_source = "$(S)/bin/toml_dump/main.cpp"
 parser_perf_source = "$(S)/bin/parser_perf/main.cpp"
-unit_sources = sorted(build.glob("$(S)/lib/shitty/*_ut.cpp"))
+unit_sources = sorted(build.glob("$(S)/lib/shitty/*_ut.cpp") + build.glob("$(S)/lib/vterm/*_ut.cpp"))
 platform_font_sources = {
     "$(S)/lib/shitty/font_freetype.cpp",
 }
@@ -680,7 +684,7 @@ enabled_renderer_sources = set()
 if linux:
     enabled_renderer_sources.add("$(S)/lib/shitty/render_vk.cpp")
 all_libshitty_sources = [
-    source for source in build.glob("$(S)/lib/shitty/*.cpp")
+    source for source in build.glob("$(S)/lib/shitty/*.cpp") + build.glob("$(S)/lib/vterm/*.cpp")
     if source not in (heap_profile_source, *unit_sources)
     and (source not in platform_font_sources or source in enabled_font_sources)
     and (source not in platform_renderer_sources or source in enabled_renderer_sources)
@@ -691,12 +695,12 @@ if darwin:
         "inputs": ["$(B)/render_msl.h"],
     })
     all_libshitty_sources.append("$(S)/lib/shitty/ui_csd_tabs.mm")
-vterm_source = "$(S)/lib/shitty/vterm.cpp"
+vterm_source = "$(S)/lib/vterm/vterm.cpp"
 font_embedded_source = "$(S)/lib/shitty/font_embedded.cpp"
 application_source = "$(S)/lib/shitty/application.cpp"
 terminal_colors_source = "$(S)/lib/shitty/terminal_colors.cpp"
 grapheme_source = "$(S)/lib/shitty/grapheme.cpp"
-unicode_source = "$(S)/lib/shitty/unicode.cpp"
+unicode_source = "$(S)/lib/vterm/unicode.cpp"
 libshitty_sources = [
     {
         "src": source,
@@ -909,6 +913,15 @@ pty_test_helper = program(
 )
 
 
+# The kernel-truth probe behind the Darwin-gated pty unit tests; built
+# on demand, run by hand on the host being characterized.
+pty_probe = program(
+    name="pty_probe",
+    output="$(B)/pty_probe",
+    srcs=["$(S)/tst/pty_probe.c"],
+)
+
+
 unit_tests = program(
     name="unit_tests",
     output="$(B)/unit_tests",
@@ -935,6 +948,157 @@ parser_perf = program(
 )
 
 
+# The whole VT core - parser, vterm and screen - driven headlessly over
+# a corpus file; the throughput an embedder would actually see.
+core_perf = program(
+    name="core_perf",
+    output="$(B)/core_perf",
+    srcs=["$(S)/bin/core_perf/main.cpp"],
+    deps=[libshitty, libstd],
+)
+
+
+# The C embedding facade over the VT core: shitty_vt_* in lib/embed,
+# linked with libstd and a headless-only libplt. `./build a` bundles
+# the three into one static archive, `./build so` links the shared
+# library with everything but the facade hidden by the version script.
+# Everything embed-side is compiled -fPIC: `build so` needs it, and a
+# position-independent static archive is what a consumer linking the
+# facade into their own shared object wants anyway.
+plt_headless = import_build(
+    plt_build,
+    "libplt_headless.a",
+    extra_cflags=[*embedded_path_flags, "-fPIC"],
+    extra_cxxflags=["-fPIC"],
+    extra_cppflags=["-Dno_vendored_std", "-I$(S)/../libstd", "-Dplatforms=headless"],
+)
+libstd_pic = import_build(
+    std_build,
+    "libstd_pic.a",
+    extra_cflags=[*embedded_path_flags, "-fPIC"],
+    extra_cxxflags=["-fPIC"],
+)
+libstd_pic.ldflags += libstd_backends
+
+embed_sources = [
+    {
+        "src": source,
+        "inputs": ["$(B)/parser.rl.h"],
+    } if source == parser_source else {
+        "src": source,
+        "inputs": ["$(B)/utf8_dfa.h"],
+    } if source == vterm_source else {
+        "src": source,
+        "inputs": ["$(B)/unicode_data.h"],
+    } if source == unicode_source else source
+    for source in sorted(build.glob("$(S)/lib/vterm/*.cpp"))
+    if source not in unit_sources
+] + ["$(S)/lib/embed/shitty_vt.cpp"]
+
+libshitty_vt_core = library(
+    name="libshitty_vt_core",
+    srcs=embed_sources,
+    cflags=["-fPIC"],
+    cxxflags=[*production_path_flags, "-fPIC"],
+    deps=[plt_headless, libstd_pic, simdutf],
+    output="$(B)/libshitty_vt_core.a",
+)
+
+example = program(
+    name="example",
+    output="$(B)/example",
+    srcs=["$(S)/bin/example/main.c"],
+    deps=[libshitty_vt_core, plt_headless, libstd_pic, simdutf],
+)
+
+if linux:
+    shitty_vt_a = command(
+        name="shitty_vt_a",
+        inputs=[
+            "$(S)/lib/embed/merge_archives.py",
+            libshitty_vt_core.output,
+            plt_headless.output,
+            libstd_pic.output,
+        ],
+        outputs=["$(B)/libshitty_vt.a"],
+        deps=[libshitty_vt_core, libstd_pic, plt_headless],
+        cmd=[[
+            "python3",
+            "$(S)/lib/embed/merge_archives.py",
+            "$(B)/libshitty_vt.a",
+            libshitty_vt_core.output,
+            plt_headless.output,
+            libstd_pic.output,
+        ]],
+        descr="AR",
+        color="magenta",
+    )
+    group("a", shitty_vt_a)
+
+    shitty_vt_so = command(
+        name="shitty_vt_so",
+        inputs=[
+            "$(S)/lib/embed/link_shared.py",
+            "$(S)/lib/embed/shitty_vt.map",
+            libshitty_vt_core.output,
+            plt_headless.output,
+            libstd_pic.output,
+        ],
+        outputs=["$(B)/libshitty_vt.so"],
+        deps=[libshitty_vt_core, libstd_pic, plt_headless],
+        cmd=[[
+            "python3",
+            "$(S)/lib/embed/link_shared.py",
+            "$(B)/libshitty_vt.so",
+            "$(S)/lib/embed/shitty_vt.map",
+            libshitty_vt_core.output,
+            plt_headless.output,
+            libstd_pic.output,
+            *simdutf.ldflags,
+            # libstd's hash, atomic and io_uring backends are probed, so the
+            # shared link needs whatever the probe chose; --no-undefined
+            # rejects the library outright without them.
+            *libstd_backends,
+        ]],
+        descr="SO",
+        color="magenta",
+    )
+    group("so", shitty_vt_so)
+
+    # The release tarball: both libraries, the header, and a pkg-config
+    # file carrying the link flags this build probed - the discovery
+    # story of issue 102. Relocatable; point PKG_CONFIG_PATH at its
+    # lib/pkgconfig after unpacking.
+    shitty_vt_tgz = command(
+        name="shitty_vt_tgz",
+        inputs=[
+            "$(S)/lib/embed/make_release.py",
+            "$(S)/lib/embed/shitty_vt.h",
+            "$(B)/libshitty_vt.a",
+            "$(B)/libshitty_vt.so",
+        ],
+        outputs=["$(B)/shitty_vt.tgz"],
+        deps=[shitty_vt_a, shitty_vt_so],
+        cmd=[[
+            "python3",
+            "$(S)/lib/embed/make_release.py",
+            "$(B)/shitty_vt.tgz",
+            shitty_version,
+            "$(S)/lib/embed/shitty_vt.h",
+            "$(B)/libshitty_vt.a",
+            "$(B)/libshitty_vt.so",
+            "--",
+            *simdutf.ldflags,
+            *libstd_backends,
+            "-lpthread",
+            "-lm",
+        ]],
+        descr="TZ",
+        color="magenta",
+    )
+    group("tgz", shitty_vt_tgz)
+
+
 # Each shard is an independent graph node with its own hard timeout.
 test_group_count = 20
 python_test_inputs = [
@@ -946,10 +1110,17 @@ python_test_inputs = [
     "$(S)/lib/shitty/heap_profile.cpp",
     "$(S)/bin/main_fuzz/main.cpp",
     "$(S)/bin/parser_perf/main.cpp",
+    "$(S)/bin/core_perf/main.cpp",
     *build.glob("$(S)/lib/shitty/*_ut.cpp"),
+    *build.glob("$(S)/lib/vterm/*_ut.cpp"),
     *build.glob("$(S)/tst/*.py"),
     *build.glob("$(S)/tst/*.md"),
     "$(S)/tst/pty_test_helper.c",
+    *build.glob("$(S)/ext/fonts/*"),
+    # The color-scheme suite reads the imported theme licenses, the
+    # embed differential replays the recorded fuzz corpus.
+    *build.glob("$(S)/ext/LICENSE.*"),
+    *build.glob("$(S)/tst/corpus/*"),
     *build.glob("$(S)/tst/**/*file_names.txt"),
     *build.glob("$(S)/tst/**/xfail.txt"),
     *build.glob("$(S)/tst/contour/vttest/*"),
@@ -1028,7 +1199,7 @@ def make_python_test_groups(name, output_directory, test_binary, test_target, pr
             name=f"{name}_group_{group_index:02}",
             inputs=python_test_inputs,
             outputs=[output],
-            deps=[test_target, pretty_test_target, toml_dump],
+            deps=[test_target, pretty_test_target, toml_dump, example],
             cmd=[
                 [
                     "python3",
@@ -1041,6 +1212,7 @@ def make_python_test_groups(name, output_directory, test_binary, test_target, pr
             cwd="$(S)",
             env={
                 "SHITTY_TEST_BINARY": test_binary,
+                "SHITTY_EMBED_EXAMPLE_BINARY": "$(B)/example",
                 "SHITTY_PRETTY_TEST_BINARY": pretty_test_binary,
                 "SHITTY_TOML_DUMP_BINARY": "$(B)/toml_dump",
                 "SHITTY_TEST_FONTCONFIG": "1" if fontconfig else "0",
@@ -3665,7 +3837,27 @@ for group_index in range(keyboard_product_group_count):
 
 group("install", st, pt)
 
-add_test(production_surface, pretty_binary_branding, instrumented=False)
+
+# The lib/vterm boundary: the core includes nothing from lib/shitty.
+vterm_boundary = command(
+    name="vterm_boundary",
+    inputs=[
+        "$(S)/lib/vterm/check_includes.py",
+        *build.glob("$(S)/lib/vterm/*.h"),
+        *build.glob("$(S)/lib/vterm/*.cpp"),
+    ],
+    outputs=["$(B)/vterm-boundary.stamp"],
+    cmd=[
+        "python3",
+        "$(S)/lib/vterm/check_includes.py",
+        "$(S)/lib/vterm",
+        "$(B)/vterm-boundary.stamp",
+    ],
+    descr="VB",
+    color="magenta",
+)
+
+add_test(production_surface, pretty_binary_branding, vterm_boundary, instrumented=False)
 
 add_test(
     *([plt_tests] if plt_tests is not None else []),

@@ -10,7 +10,7 @@ way the run does."""
 import unittest
 
 from font_fixture import NERD_FONT
-from harness import Shitty
+from harness import TEST_PLATFORM, Shitty
 
 
 BORDER = 2
@@ -59,8 +59,14 @@ class ItalicOverhangTest(unittest.TestCase):
         width, height, tail = render("\x1b[3mw \x1b[0m")
         captured = cell_columns(width, height, tail, cell, 1)
         self.assertEqual(captured[:2], overhang)
-        # And nothing beyond the overhang: the blank stays a blank.
-        self.assertTrue(all(value == 0 for value in captured[2:]), captured)
+        # How many of the blank's columns the shear inks is the
+        # backend's geometry: FreeType's oblique dies within two
+        # columns - keep that pinned - while CoreText shears farther.
+        # On both, the capture is bounded: the next cell stays a blank.
+        if TEST_PLATFORM != "cocoa":
+            self.assertTrue(all(value == 0 for value in captured[2:]), captured)
+        beyond = cell_columns(width, height, tail, cell, 2)
+        self.assertTrue(all(value == 0 for value in beyond), (captured, beyond))
 
     def test_a_bold_blank_still_catches_the_tail(self):
         # A blank shapes to nothing, so an attribute that only picks a

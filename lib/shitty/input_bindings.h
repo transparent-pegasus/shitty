@@ -6,7 +6,7 @@
 
 #pragma once
 
-#include "input_handler.h"
+#include <lib/vterm/input_handler.h>
 
 #include <std/sys/types.h>
 

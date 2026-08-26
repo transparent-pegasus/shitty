@@ -6,36 +6,40 @@
 
 #include "test_mode.h"
 
-#include "fatal.h"
-
-#include "cell_extra_store.h"
-#include "composer.h"
-#include "configuration.h"
-#include "drop_target.h"
-#include "grapheme.h"
-#include "font_pack.h"
-#include "hex.h"
-#include "num.h"
-#include "input_handler.h"
-#include "keyboard.h"
-#include "listener.h"
-#include "options.h"
-#include "mouse_protocol.h"
-#include "mouse_frontend.h"
 #include "pty.h"
-#include "render_reference.h"
-#include "screen.h"
+#include "render.h"
+#include "options.h"
 #include "session.h"
 #include "startup.h"
+#include "composer.h"
+#include "font_pack.h"
 #include "test_input.h"
-#include "utf8.h"
-#include "render.h"
+#include "application.h"
+#include "debug_trace.h"
+#include "drop_target.h"
+#include "span_shaper.h"
+#include "configuration.h"
+#include "render_reference.h"
+
+#include <lib/vterm/hex.h>
+#include <lib/vterm/num.h>
+#include <lib/vterm/utf8.h>
+#include <lib/vterm/fatal.h>
+#include <lib/vterm/screen.h>
+#include <lib/vterm/grapheme.h>
+#include <lib/vterm/keyboard.h>
+#include <lib/vterm/listener.h>
+#include <lib/vterm/input_handler.h>
+#include <lib/vterm/mouse_frontend.h>
+#include <lib/vterm/mouse_protocol.h>
+#include <lib/vterm/cell_extra_store.h>
+
 #if defined(HAVE_VULKAN_WAYLAND)
     #include "render_vk.h"
 #endif
-#include "vterm.h"
-#include "vterm_test.h"
-#include "vterm_trace.h"
+#include <lib/vterm/vterm.h>
+#include <lib/vterm/vt_test.h>
+#include <lib/vterm/vt_trace.h>
 
 #include <plt/clipboard.h>
 #include <plt/drop.h>
@@ -103,11 +107,11 @@ namespace {
         }
 
         u16 getPx() const override {
-            return composer.glyphWidth;
+            return composer.geometry.cellPixelWidth;
         }
 
         u16 getPy() const override {
-            return composer.glyphHeight;
+            return composer.geometry.cellPixelHeight;
         }
 
         float boxDrawingStroke() const override {
@@ -569,8 +573,7 @@ size_t TestPty::rawWrite(const void* data, size_t size) {
         if (count < 0 && errno == EINTR) {
             continue;
         }
-        if (scriptedWrites_ && count < 0
-            && (errno == EAGAIN || errno == EWOULDBLOCK)) {
+        if (scriptedWrites_ && count < 0 && (errno == EAGAIN || errno == EWOULDBLOCK)) {
             // Scripted backpressure keeps the unsent bytes and waits for the
             // next FLUSH_OUTPUT kick; the test controls every retry. A fatal
             // scripted error follows the production PTY contract below and
@@ -1136,6 +1139,7 @@ namespace {
         u8 getLedState();
         bool getReverseWrapMode();
         bool getNationalReplacementMode();
+        bool getAlternateScroll();
         bool getAnsiMode(u32 mode);
         bool getPrivateMode(u32 mode);
         bool getTabStop(u16 column);
@@ -1708,6 +1712,13 @@ u8 TestTerminal::getKittyKeyboardFlags() {
     return testApi.inspect().kittyKeyboardFlags;
 }
 
+bool TestTerminal::getAlternateScroll() {
+    // Read through the terminal's own state accessor rather than the
+    // test api, so this exercises what a client outside the terminal
+    // actually sees.
+    return terminal.state().alternateScroll;
+}
+
 bool TestTerminal::getScreenReverseVideo() {
     return testApi.inspect().screenReverseVideo;
 }
@@ -2076,13 +2087,13 @@ int runTestMode(Composer& composer, TestInput& input, plt::WindowEvents& events,
             glyphWidth = (unsigned)(width);
             glyphHeight = (unsigned)(height);
         }
-        composer.setGlyphSize(glyphWidth, glyphHeight);
+        composer.geometry.setCellPixelSize(glyphWidth, glyphHeight);
     }
     auto* const testFonts = composer.pool->make<TestFontpack>(composer);
     composer.fonts = testFonts;
     composer.configChangedListeners.pushBack(testFonts);
-    const u16 width = 2 * composer.borderPixels() + composer.opts->nCols * composer.glyphWidth;
-    const u16 height = 2 * composer.borderPixels() + composer.opts->nRows * composer.glyphHeight;
+    const u16 width = 2 * composer.geometry.borderPixels + composer.opts->nCols * composer.geometry.cellPixelWidth;
+    const u16 height = 2 * composer.geometry.borderPixels + composer.opts->nRows * composer.geometry.cellPixelHeight;
     composer.platform = plt::createHeadlessPlatform(*composer.pool);
     composer.config->start();
     STD_DEFER {
@@ -2091,7 +2102,7 @@ int runTestMode(Composer& composer, TestInput& input, plt::WindowEvents& events,
     composer.window = composer.platform->createWindow(
         *composer.pool,
         {
-            .title = StringView(composer.opts->title),
+            .title = StringView(composer.opts->vt.title),
             .width = width,
             .height = height,
             .decorations = !composer.opts->noDecorations,
@@ -2101,13 +2112,19 @@ int runTestMode(Composer& composer, TestInput& input, plt::WindowEvents& events,
         }
     );
     auto& window = static_cast<plt::WindowHeadless&>(*composer.window);
-    composer.resize(width, height);
+    composer.installVtHost();
+    openDebugTrace(composer);
+    // The same startup request the interactive run makes; the first
+    // dispatched frame then carries the grown window into the grid.
+    applyStartupWindowState(composer);
+    composer.geometry.resize(width, height, composer.host);
     LaunchCommand testLaunch;
     composer.launch = &testLaunch;
     TestPtyFactory ptyFactory(composer, io[0]);
     composer.pty = &ptyFactory;
     TestClipboard clipboard(composer);
     window.setClipboards(clipboard.primaryFacet, clipboard.systemFacet);
+    composer.shaper = SpanShaper::create(composer, *composer.pool);
     composer.rendererPool = ObjPool::fromMemory();
     composer.renderer = Renderer::create(composer, *composer.rendererPool, window.renderContext());
     auto& renderer = static_cast<ReferenceRenderer&>(*composer.renderer);
@@ -2389,7 +2406,7 @@ int runTestMode(Composer& composer, TestInput& input, plt::WindowEvents& events,
                         const auto packedColor = [](Color color) {
                             return ((u32)(color.red) << 16) | ((u32)(color.green) << 8) | color.blue;
                         };
-                        writeParts(controlFd, StringView(u8"OK fontsize="), (i64)(composer.opts->fontsize), StringView(u8" border="), (i64)(composer.opts->border), StringView(u8" columns="), (i64)(composer.opts->nCols), StringView(u8" rows="), (i64)(composer.opts->nRows), StringView(u8" save_lines="), (i64)(composer.opts->saveLines), StringView(u8" fg="), (i64)(packedColor(composer.opts->fg)), StringView(u8" bg="), (i64)(packedColor(composer.opts->bg)), StringView(u8" cr="), (i64)(packedColor(composer.opts->cr)), StringView(u8" alt_scroll="), (i64)(composer.opts->altScrollMode), StringView(u8" bold_colors="), (i64)(composer.opts->boldColors), StringView(u8" auto_copy="), (i64)(composer.opts->autoCopyMode), StringView(u8" allow_osc52_read="), (i64)(composer.opts->allowOsc52Read), StringView(u8" allow_window_ops="), (i64)(composer.opts->allowWindowOps), StringView(u8" maximized="), (i64)(composer.opts->maximized), StringView(u8" no_decorations="), (i64)(composer.opts->noDecorations), StringView(u8"\n"));
+                        writeParts(controlFd, StringView(u8"OK fontsize="), (i64)(composer.opts->fontsize), StringView(u8" border="), (i64)(composer.opts->border), StringView(u8" columns="), (i64)(composer.opts->nCols), StringView(u8" rows="), (i64)(composer.opts->nRows), StringView(u8" save_lines="), (i64)(composer.opts->vt.saveLines), StringView(u8" fg="), (i64)(packedColor(composer.opts->vt.fg)), StringView(u8" bg="), (i64)(packedColor(composer.opts->vt.bg)), StringView(u8" cr="), (i64)(packedColor(composer.opts->vt.cr)), StringView(u8" alt_scroll="), (i64)(composer.opts->vt.altScrollMode), StringView(u8" bold_colors="), (i64)(composer.opts->vt.boldColors), StringView(u8" auto_copy="), (i64)(composer.opts->vt.autoCopyMode), StringView(u8" allow_osc52_read="), (i64)(composer.opts->vt.allowOsc52Read), StringView(u8" allow_window_ops="), (i64)(composer.opts->vt.allowWindowOps), StringView(u8" maximized="), (i64)(composer.opts->maximized), StringView(u8" fullscreen="), (i64)(composer.opts->fullscreen), StringView(u8" no_decorations="), (i64)(composer.opts->noDecorations), StringView(u8"\n"));
                     } else if (line == StringView(u8"ARGV")) {
                         Buffer arguments;
                         for (int index = 0; index < argc; ++index) {
@@ -2426,21 +2443,22 @@ int runTestMode(Composer& composer, TestInput& input, plt::WindowEvents& events,
                         splitFontNames(StringView(request), names);
                         ObjPool::Ref renderPool = ObjPool::fromMemory();
                         Composer& renderComposer = *renderPool->make<Composer>(renderPool.mutPtr());
-                        renderComposer.opts = composer.opts;
+                        renderComposer.setOptions(composer.opts);
                         renderComposer.contentScale = composer.contentScale;
                         Fontpack* fonts = Fontpack::create(renderComposer, *renderPool, names.data(), names.length(), composer.opts->fontsize);
                         renderComposer.fonts = fonts;
-                        renderComposer.setCellExtras(composer.cellExtras);
-                        renderComposer.setGlyphSize(fonts->getPx(), fonts->getPy());
-                        const u16 imageWidth = 2 * composer.borderPixels() + renderer.columns() * fonts->getPx();
-                        const u16 imageHeight = 2 * composer.borderPixels() + renderer.rows() * fonts->getPy();
-                        renderComposer.resize(imageWidth, imageHeight);
+                        renderComposer.extras.replace(composer.extras.store);
+                        renderComposer.geometry.setCellPixelSize(fonts->getPx(), fonts->getPy());
+                        const u16 imageWidth = 2 * composer.geometry.borderPixels + renderer.columns() * fonts->getPx();
+                        const u16 imageHeight = 2 * composer.geometry.borderPixels + renderer.rows() * fonts->getPy();
+                        renderComposer.geometry.resize(imageWidth, imageHeight, renderComposer.host);
                         renderComposer.platform = plt::createHeadlessPlatform(*renderPool);
+                        renderComposer.shaper = SpanShaper::create(renderComposer, *renderPool);
                         TerminalUpdate imageUpdate = renderer.renderUpdate();
                         // The retained cells shape through a throwaway screen
                         // carrying the requested fontpack; its own rows stay
                         // blank.
-                        imageUpdate.shapes = Screen::createPrimary(renderComposer, *renderPool, renderer.columns(), renderer.rows(), imageUpdate.colors, 0);
+                        imageUpdate.shapes = Screen::createPrimary(renderComposer.extras, *renderPool, renderer.columns(), renderer.rows(), imageUpdate.colors, 0);
                         imageUpdate.shapeFromCells = true;
 
                         struct ImageFrame final: plt::FrameCallback {
@@ -2566,7 +2584,7 @@ int runTestMode(Composer& composer, TestInput& input, plt::WindowEvents& events,
                             if (childTty > STDERR_FILENO) {
                                 close(childTty);
                             }
-                            configureTerminalChildEnvironment(*composer.brand, composer.opts->widths);
+                            configureTerminalChildEnvironment(*composer.brand, composer.opts->vt.widths);
                             argumentPointers.pushBack(nullptr);
                             execvp(argumentPointers[0], argumentPointers.mutData());
                             _exit(127);
@@ -2723,7 +2741,7 @@ int runTestMode(Composer& composer, TestInput& input, plt::WindowEvents& events,
                     } else if (line == StringView(u8"VULKAN_SHADOW")) {
                         writeParts(controlFd, StringView(u8"OK "), (i64)(vulkanShadow != nullptr), StringView(u8"\n"));
                     } else if (line == StringView(u8"SHAPE_GENERATION")) {
-                        writeParts(controlFd, StringView(u8"OK "), (i64)(testApi.shapeGeneration()), StringView(u8"\n"));
+                        writeParts(controlFd, StringView(u8"OK "), (i64)(composer.shaper->spanGeneration()), StringView(u8"\n"));
                     } else if (line == StringView(u8"FAIL_NEXT_FONT_CHANGE")) {
                         failFontChange.arm();
                         writeAll(controlFd, "OK\n");
@@ -2773,7 +2791,7 @@ int runTestMode(Composer& composer, TestInput& input, plt::WindowEvents& events,
                         int pixelX;
                         int pixelY;
                         double time;
-                        if (!(args.read(x) && args.read(y) && args.read(modifiers) && args.read(pixelX) && args.read(pixelY) && args.read(phase) && args.read(precise) && args.read(momentum) && args.read(time)) || modifiers > 7 || phase > 4 || precise > 1 || momentum > 1) {
+                        if (!(args.read(x) && args.read(y) && args.read(modifiers) && args.read(pixelX) && args.read(pixelY) && args.read(phase) && args.read(precise) && args.read(momentum) && args.read(time)) || modifiers > 15 || phase > 4 || precise > 1 || momentum > 1) {
                             raiseError(StringView(u8"invalid scroll event"));
                         }
                         composer.input->scroll({
@@ -2793,7 +2811,7 @@ int runTestMode(Composer& composer, TestInput& input, plt::WindowEvents& events,
                         ArgReader args(tail(line, 8));
                         double x, y, scaleX, scaleY;
                         unsigned modifiers;
-                        if (!(args.read(x) && args.read(y) && args.read(modifiers) && args.read(scaleX) && args.read(scaleY)) || modifiers > 7) {
+                        if (!(args.read(x) && args.read(y) && args.read(modifiers) && args.read(scaleX) && args.read(scaleY)) || modifiers > 15) {
                             raiseError(StringView(u8"invalid pointer event"));
                         }
                         const int pixelX = mouseFramebufferCoordinate(x, scaleX);
@@ -2806,7 +2824,7 @@ int runTestMode(Composer& composer, TestInput& input, plt::WindowEvents& events,
                         int button;
                         unsigned pressed, modifiers;
                         double x, y, time, scaleX, scaleY;
-                        if (!(args.read(button) && args.read(pressed) && args.read(x) && args.read(y) && args.read(modifiers) && args.read(time) && args.read(scaleX) && args.read(scaleY)) || button < 0 || button > 7 || pressed > 1 || modifiers > 7) {
+                        if (!(args.read(button) && args.read(pressed) && args.read(x) && args.read(y) && args.read(modifiers) && args.read(time) && args.read(scaleX) && args.read(scaleY)) || button < 0 || button > 7 || pressed > 1 || modifiers > 15) {
                             raiseError(StringView(u8"invalid button event"));
                         }
                         const int pixelX = mouseFramebufferCoordinate(x, scaleX);
@@ -2827,13 +2845,13 @@ int runTestMode(Composer& composer, TestInput& input, plt::WindowEvents& events,
                         if (!(args.read(columns) && args.read(rows)) || !columns || !rows) {
                             raiseError(StringView(u8"invalid resize"));
                         }
-                        terminal.resize(2 * composer.borderPixels() + columns * composer.glyphWidth, 2 * composer.borderPixels() + rows * composer.glyphHeight);
+                        terminal.resize(2 * composer.geometry.borderPixels + columns * composer.geometry.cellPixelWidth, 2 * composer.geometry.borderPixels + rows * composer.geometry.cellPixelHeight);
                         writeAll(controlFd, "OK\n");
                     } else if (startsWith(line, StringView(u8"RESIZE_PIXELS "))) {
                         ArgReader args(tail(line, 14));
                         unsigned pixelWidth;
                         unsigned pixelHeight;
-                        if (!(args.read(pixelWidth) && args.read(pixelHeight)) || pixelWidth <= 2 * composer.borderPixels() || pixelHeight <= 2 * composer.borderPixels()) {
+                        if (!(args.read(pixelWidth) && args.read(pixelHeight)) || pixelWidth <= 2 * composer.geometry.borderPixels || pixelHeight <= 2 * composer.geometry.borderPixels) {
                             raiseError(StringView(u8"invalid pixel resize"));
                         }
                         terminal.resize(pixelWidth, pixelHeight);
@@ -2887,7 +2905,7 @@ int runTestMode(Composer& composer, TestInput& input, plt::WindowEvents& events,
                         writeParts(controlFd, StringView(u8"OK "), (i64)(size.ws_col), StringView(u8" "), (i64)(size.ws_row), StringView(u8" "), (i64)(size.ws_xpixel), StringView(u8" "), (i64)(size.ws_ypixel), StringView(u8"\n"));
                     } else if (line == StringView(u8"FONT_STATE")) {
                         StringBuilder output;
-                        output << StringView(u8"OK ") << composer.fontSize << StringView(u8" ") << composer.glyphWidth << StringView(u8" ") << composer.glyphHeight << StringView(u8" ") << composer.pixelWidth << StringView(u8" ") << composer.pixelHeight << StringView(u8" ") << composer.columns << StringView(u8" ") << composer.rows << StringView(u8" ") << (unsigned)(composer.contentScale * 1000.0f + 0.5f) << StringView(u8" ") << composer.borderPixels() << StringView(u8"\n");
+                        output << StringView(u8"OK ") << composer.fontSize << StringView(u8" ") << composer.geometry.cellPixelWidth << StringView(u8" ") << composer.geometry.cellPixelHeight << StringView(u8" ") << composer.geometry.pixelWidth << StringView(u8" ") << composer.geometry.pixelHeight << StringView(u8" ") << composer.geometry.columns << StringView(u8" ") << composer.geometry.rows << StringView(u8" ") << (unsigned)(composer.contentScale * 1000.0f + 0.5f) << StringView(u8" ") << composer.geometry.borderPixels << StringView(u8"\n");
                         writeAll(controlFd, StringView(output));
                     } else if (line == StringView(u8"LAST_UPDATE")) {
                         Buffer response;
@@ -3089,11 +3107,11 @@ int runTestMode(Composer& composer, TestInput& input, plt::WindowEvents& events,
                             raiseError(StringView(u8"invalid selection cycle"));
                         }
                         if (start) {
-                            terminal.selectStart(composer.borderPixels() + column * composer.glyphWidth, composer.borderPixels() + row * composer.glyphHeight, cycle != 0);
+                            terminal.selectStart(composer.geometry.borderPixels + column * composer.geometry.cellPixelWidth, composer.geometry.borderPixels + row * composer.geometry.cellPixelHeight, cycle != 0);
                         } else if (extend) {
-                            terminal.selectExtend(composer.borderPixels() + column * composer.glyphWidth, composer.borderPixels() + row * composer.glyphHeight, cycle != 0);
+                            terminal.selectExtend(composer.geometry.borderPixels + column * composer.geometry.cellPixelWidth, composer.geometry.borderPixels + row * composer.geometry.cellPixelHeight, cycle != 0);
                         } else {
-                            terminal.selectUpdate(composer.borderPixels() + column * composer.glyphWidth, composer.borderPixels() + row * composer.glyphHeight);
+                            terminal.selectUpdate(composer.geometry.borderPixels + column * composer.geometry.cellPixelWidth, composer.geometry.borderPixels + row * composer.geometry.cellPixelHeight);
                         }
                         writeAll(controlFd, "OK\n");
                     } else if (line == StringView(u8"SELECT_RECTANGULAR")) {
@@ -3116,7 +3134,7 @@ int runTestMode(Composer& composer, TestInput& input, plt::WindowEvents& events,
                             raiseError(StringView(u8"invalid hyperlink point"));
                         }
                         Buffer link;
-                        terminal.getHyperlink(composer.borderPixels() + column, composer.borderPixels() + row, link);
+                        terminal.getHyperlink(composer.geometry.borderPixels + column, composer.geometry.borderPixels + row, link);
                         writeParts(controlFd, StringView(u8"OK "), HexOut{StringView(link)}, StringView(u8"\n"));
                     } else if (line == StringView(u8"HYPERLINK_COUNT")) {
                         writeParts(controlFd, StringView(u8"OK "), (i64)(terminal.getHyperlinkCount()), StringView(u8"\n"));
@@ -3141,7 +3159,7 @@ int runTestMode(Composer& composer, TestInput& input, plt::WindowEvents& events,
                         const auto& mouse = terminal.getMouseTrackingState();
                         writeParts(controlFd, StringView(u8"OK "), (i64)((unsigned)(mouse.mode)), StringView(u8" "), (i64)((unsigned)(mouse.enc)), StringView(u8" "), (i64)(mouse.focusEventMode), StringView(u8" "), (i64)(terminal.getKittyKeyboardFlags()), StringView(u8"\n"));
                     } else if (line == StringView(u8"PROTOCOL_STATE")) {
-                        writeParts(controlFd, StringView(u8"OK "), (i64)(terminal.getScreenReverseVideo()), StringView(u8" "), (i64)(terminal.getLedState()), StringView(u8" "), (i64)(terminal.getReverseWrapMode()), StringView(u8" "), (i64)(terminal.getNationalReplacementMode()), StringView(u8" 0\n"));
+                        writeParts(controlFd, StringView(u8"OK "), (i64)(terminal.getScreenReverseVideo()), StringView(u8" "), (i64)(terminal.getLedState()), StringView(u8" "), (i64)(terminal.getReverseWrapMode()), StringView(u8" "), (i64)(terminal.getNationalReplacementMode()), StringView(u8" "), (i64)(terminal.getAlternateScroll()), StringView(u8"\n"));
                     } else if (line == StringView(u8"CURSOR_STATE")) {
                         writeParts(controlFd, StringView(u8"OK "), (i64)(terminal.getPrivateMode(25)), StringView(u8" "), (i64)(terminal.getPrivateMode(12)), StringView(u8" "), (i64)((unsigned)(terminal.getCursorStyle())), StringView(u8"\n"));
                     } else if (line == StringView(u8"CURSOR_PENDING_WRAP")) {
@@ -3244,7 +3262,7 @@ int runTestMode(Composer& composer, TestInput& input, plt::WindowEvents& events,
                             if (!parseU64(StringView(token), codepoint, 16) || codepoint > 0x10ffff) {
                                 raiseError(StringView(u8"invalid codepoint"));
                             }
-                            output << StringView(u8" ") << composer.opts->widths.codepointWidth((u32)(codepoint));
+                            output << StringView(u8" ") << composer.opts->vt.widths.codepointWidth((u32)(codepoint));
                             ++count;
                         }
                         if (!count) {

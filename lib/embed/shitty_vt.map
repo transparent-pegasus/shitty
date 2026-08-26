@@ -1,0 +1,6 @@
+SHITTY_VT_1 {
+    global:
+        shitty_vt_*;
+    local:
+        *;
+};

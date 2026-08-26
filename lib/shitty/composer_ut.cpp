@@ -4,15 +4,15 @@
  * See the file LICENSE.MIT for the full license.
  */
 
-#include "composer.h"
-
-#include "cell_extra_store.h"
-#include "input_bindings.h"
-#include "listener.h"
 #include "options.h"
+#include "composer.h"
+#include "input_bindings.h"
 
-#include <std/mem/obj_pool.h>
+#include <lib/vterm/listener.h>
+#include <lib/vterm/cell_extra_store.h>
+
 #include <std/tst/ut.h>
+#include <std/mem/obj_pool.h>
 
 using namespace stl;
 
@@ -46,11 +46,11 @@ StateListener::StateListener(Composer& composer_)
 }
 
 void StateListener::onListen(void* argument) {
-    extras = composer.cellExtras;
-    columns = composer.columns;
-    rows = composer.rows;
-    pixelWidth = composer.pixelWidth;
-    pixelHeight = composer.pixelHeight;
+    extras = composer.extras.store;
+    columns = composer.geometry.columns;
+    rows = composer.geometry.rows;
+    pixelWidth = composer.geometry.pixelWidth;
+    pixelHeight = composer.geometry.pixelHeight;
     contentScale = composer.contentScale;
     ++calls;
     argumentWasNull = argument == nullptr;
@@ -67,7 +67,7 @@ STD_TEST_SUITE(Composer) {
         Composer& composer = *pool->make<Composer>(pool.mutPtr());
 
         STD_INSIST(composer.pool == pool.mutPtr());
-        STD_INSIST(composer.cellExtras != nullptr);
+        STD_INSIST(composer.extras.store != nullptr);
         STD_INSIST(composer.smallObjects != nullptr);
         STD_INSIST(composer.input != nullptr);
         STD_INSIST(composer.inputBindings != nullptr);
@@ -98,13 +98,13 @@ STD_TEST_SUITE(Composer) {
         Composer& composer = *pool->make<Composer>(pool.mutPtr());
         Options options;
         options.border = 7;
-        composer.opts = &options;
+        composer.setOptions(&options);
 
-        STD_INSIST(composer.borderPixels() == 7);
+        STD_INSIST(composer.geometry.borderPixels == 7);
 
         composer.setContentScale(1.5f);
 
-        STD_INSIST(composer.borderPixels() == 11);
+        STD_INSIST(composer.geometry.borderPixels == 11);
     }
 
     STD_TEST(PublishesCommittedResizeState) {
@@ -112,11 +112,12 @@ STD_TEST_SUITE(Composer) {
         Composer& composer = *pool->make<Composer>(pool.mutPtr());
         StateListener listener(composer);
         composer.resizedListeners.pushBack(&listener);
-        composer.setGlyphSize(8, 16);
-        const u16 width = 2 * composer.borderPixels() + 10 * composer.glyphWidth + 3;
-        const u16 height = 2 * composer.borderPixels() + 4 * composer.glyphHeight + 7;
+        composer.installVtHost();
+        composer.geometry.setCellPixelSize(8, 16);
+        const u16 width = 2 * composer.geometry.borderPixels + 10 * composer.geometry.cellPixelWidth + 3;
+        const u16 height = 2 * composer.geometry.borderPixels + 4 * composer.geometry.cellPixelHeight + 7;
 
-        composer.resize(width, height);
+        composer.geometry.resize(width, height, composer.host);
 
         STD_INSIST(listener.calls == 1);
         STD_INSIST(listener.columns == 10);
@@ -124,11 +125,11 @@ STD_TEST_SUITE(Composer) {
         STD_INSIST(listener.pixelWidth == width);
         STD_INSIST(listener.pixelHeight == height);
 
-        composer.resize(width, height);
+        composer.geometry.resize(width, height, composer.host);
 
         STD_INSIST(listener.calls == 1);
 
-        composer.resize(width + 1, height);
+        composer.geometry.resize(width + 1, height, composer.host);
 
         STD_INSIST(listener.calls == 2);
         STD_INSIST(listener.columns == 10);
@@ -139,20 +140,20 @@ STD_TEST_SUITE(Composer) {
         auto pool = ObjPool::fromMemory();
         Composer& composer = *pool->make<Composer>(pool.mutPtr());
         StateListener listener(composer);
-        composer.cellExtrasChangedListeners.pushBack(&listener);
+        composer.extras.changedListeners.pushBack(&listener);
         auto* first = reinterpret_cast<CellExtraStore*>(uintptr_t(1));
         auto* second = reinterpret_cast<CellExtraStore*>(uintptr_t(2));
 
-        composer.setCellExtras(first);
+        composer.extras.replace(first);
 
         STD_INSIST(listener.calls == 1);
         STD_INSIST(listener.extras == first);
 
-        composer.setCellExtras(first);
+        composer.extras.replace(first);
 
         STD_INSIST(listener.calls == 1);
 
-        composer.setCellExtras(second);
+        composer.extras.replace(second);
 
         STD_INSIST(listener.calls == 2);
         STD_INSIST(listener.extras == second);

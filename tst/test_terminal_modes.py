@@ -241,6 +241,20 @@ class TerminalModeTest(unittest.TestCase):
             snapshot = terminal.snapshot()
             self.assertEqual(snapshot.cell(2, 1).char, "Y")
 
+    def test_alternate_scroll_mode_is_reported(self):
+        # DECSET 1007 read back through the terminal's own state, which is
+        # the accessor a client outside the terminal uses; it is
+        # independent of the alternate screen it applies on.
+        with Shitty() as terminal:
+            self.assertEqual(terminal.protocol_state()[4], 0)
+            terminal.write(b"\x1b[?1007h")
+            self.assertEqual(terminal.protocol_state()[4], 1)
+            terminal.write(b"\x1b[?1049h")
+            self.assertEqual(terminal.protocol_state()[4], 1)
+            terminal.write(b"\x1b[?1007l")
+            self.assertEqual(terminal.protocol_state()[4], 0)
+
 
 if __name__ == "__main__":
     unittest.main()
+

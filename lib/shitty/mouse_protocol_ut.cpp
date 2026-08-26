@@ -4,12 +4,12 @@
  * See the file LICENSE.MIT for the full license.
  */
 
-#include "mouse_protocol.h"
+#include <lib/vterm/mouse_protocol.h>
 
+#include <std/tst/ut.h>
+#include <std/str/view.h>
 #include <std/lib/buffer.h>
 #include <std/str/builder.h>
-#include <std/str/view.h>
-#include <std/tst/ut.h>
 
 using namespace stl;
 

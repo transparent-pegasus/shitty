@@ -102,6 +102,31 @@ class OptionTest(unittest.TestCase):
         ) as terminal:
             self.assertEqual(terminal.options()["maximized"], 0)
 
+    def test_fullscreen_is_a_boolean_startup_option(self):
+        result = run_startup_failure(extra_arguments=("-help",))
+        self.assertEqual(result.returncode, 0)
+        self.assertIn(b"-fullscreen", result.stdout)
+
+        with Shitty() as terminal:
+            self.assertEqual(terminal.options()["fullscreen"], 0)
+        with Shitty(extra_arguments=("-fullscreen",)) as terminal:
+            self.assertEqual(terminal.options()["fullscreen"], 1)
+        with Shitty(
+            extra_arguments=("-fullscreen", "+fullscreen")
+        ) as terminal:
+            self.assertEqual(terminal.options()["fullscreen"], 0)
+
+    def test_fullscreen_and_maximized_are_independent_options(self):
+        # Both may be configured at once; the startup path prefers
+        # fullscreen, so the parsed pair must survive intact for it to
+        # make that choice.
+        with Shitty(
+            extra_arguments=("-fullscreen", "-maximized")
+        ) as terminal:
+            options = terminal.options()
+            self.assertEqual(options["fullscreen"], 1)
+            self.assertEqual(options["maximized"], 1)
+
     def test_kitty_ctrl_base_layout_is_listed_in_help(self):
         result = run_startup_failure(extra_arguments=("-help",))
         self.assertEqual(result.returncode, 0)

@@ -11,6 +11,11 @@ build.cxxflags += [
     "-Wall",
 ]
 
+# -Dplatforms=headless builds only the in-process backend: no wayland,
+# no cocoa, no protocol scanning - what a library embedding the VT core
+# links against.
+platforms_headless = "-Dplatforms=headless" in build.cppflags
+
 libstd = dependency(
     ldflags=[]
     if "-Dno_vendored_std" in build.cppflags or "-lstd" in build.ldflags
@@ -40,7 +45,9 @@ elif build.target != build.host:
 else:
     system = host.system()
 
-if system == "Linux":
+if platforms_headless:
+    backend_deps = []
+elif system == "Linux":
     protocol_root = pkg_config_variable("wayland-protocols", "pkgdatadir")
     protocol_paths = [
         "stable/viewporter/viewporter",
@@ -147,15 +154,15 @@ else:
     raise RuntimeError(f"unsupported platform: {system}")
 
 libplt = library(
-    name="plt",
-    srcs=[*common_sources, *backend_sources],
+    name="plt_headless" if platforms_headless else "plt",
+    srcs=common_sources if platforms_headless else [*common_sources, *backend_sources],
     public_cflags=["-I$(S)", "-I$(S)/.."],
     cxxflags=locals().get("backend_cxxflags", []),
     deps=[libstd, *backend_deps],
-    output="$(B)/libplt.a",
+    output="$(B)/libplt_headless.a" if platforms_headless else "$(B)/libplt.a",
 )
 
-if build.target == build.host:
+if build.target == build.host and not platforms_headless:
     plt_unit_test_sources = [
         "$(S)/tests/test_ut.cpp",
         "$(S)/drop_ut.cpp",

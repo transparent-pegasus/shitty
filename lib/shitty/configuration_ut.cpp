@@ -4,17 +4,17 @@
  * See the file LICENSE.MIT for the full license.
  */
 
+#include "options.h"
+#include "composer.h"
 #include "configuration.h"
 
-#include "composer.h"
-#include "listener.h"
-#include "options.h"
+#include <lib/vterm/listener.h>
 
-#include <std/mem/obj_pool.h>
-#include <std/str/builder.h>
 #include <std/sys/fd.h>
-#include <std/sys/mem_fd.h>
 #include <std/tst/ut.h>
+#include <std/sys/mem_fd.h>
+#include <std/str/builder.h>
+#include <std/mem/obj_pool.h>
 
 #include <unistd.h>
 

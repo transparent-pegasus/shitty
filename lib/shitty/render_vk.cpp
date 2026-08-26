@@ -7,37 +7,37 @@
 #include "render_vk.h"
 
 #include "brand.h"
-#include "cell_extra_store.h"
+#include "render.h"
+#include "options.h"
 #include "composer.h"
 #include "font_pack.h"
-#include "listener.h"
-#include "fatal.h"
-#include "render.h"
-
-#include "options.h"
+#include "span_shaper.h"
 #include "render_damage.h"
-#include "screen.h"
-#include "utf8.h"
-#include "vterm.h"
 
-#include <plt/window.h>
+#include <lib/vterm/utf8.h>
+#include <lib/vterm/fatal.h>
+#include <lib/vterm/vterm.h>
+#include <lib/vterm/screen.h>
+#include <lib/vterm/listener.h>
+#include <lib/vterm/cell_extra_store.h>
 
-#include <std/alg/minmax.h>
-#include <std/dbg/assert.h>
-#include <std/alg/xchg.h>
-#include <std/sys/crt.h>
 #include <std/ios/sys.h>
-#include <std/lib/buffer.h>
-#include <std/lib/list.h>
-#include <std/lib/vector.h>
 #include <std/mem/new.h>
-#include <std/mem/obj_pool.h>
-#include <std/mem/small_obj_allocator.h>
 #include <std/rng/mix.h>
+#include <std/sys/crt.h>
+#include <std/alg/xchg.h>
+#include <std/lib/list.h>
 #include <std/str/hash.h>
 #include <std/str/view.h>
+#include <std/alg/minmax.h>
+#include <std/dbg/assert.h>
+#include <std/lib/buffer.h>
+#include <std/lib/vector.h>
 #include <std/typ/intrin.h>
+#include <std/mem/obj_pool.h>
+#include <std/mem/small_obj_allocator.h>
 
+#include <plt/window.h>
 #include <vulkan/vulkan.h>
 
 #if defined(HAVE_VULKAN_WAYLAND)
@@ -278,7 +278,7 @@ namespace {
         Vector<ScreenRowSpan> spanScratch;
         TerminalCursor previousCursor;
         Rect previousSelection;
-        Color clearBackground = composer.opts->bg;
+        Color clearBackground = composer.opts->vt.bg;
         u32 previousHoveredHyperlink = 0;
         u32 previousHoveredLinkBegin = 0;
         u32 previousHoveredLinkEnd = 0;
@@ -334,10 +334,10 @@ namespace {
         VkDeviceSize stageFontData(const void* data, size_t len, size_t expected);
         void ensureArenaBuffer(ArenaBuffer& arena, size_t bytes);
         void stageArenaCopy(ArenaBuffer& arena, Vector<VkBufferCopy>& copies, const u8* data, size_t used);
-        void stageArenaTails(Screen& shapes, u32 generation);
+        void stageArenaTails(SpanShaper& shaper, u32 generation);
         void applySpanStrips(u32 rowIndex, const ScreenRowSpan& span);
-        void assignRowStrips(Screen& shapes, u16 row);
-        void overrideOverlayStrips(Screen& shapes, const TerminalUpdate& update);
+        void assignRowStrips(Screen& shapes, SpanShaper& shaper, u16 row);
+        void overrideOverlayStrips(SpanShaper& shaper, const TerminalUpdate& update);
         u32 assignStrips(const TerminalUpdate& update, bool allRows);
         void resetArenaStaging();
         void recordArenaUploads(FrameResources& frame);
@@ -1463,7 +1463,7 @@ VkDeviceSize RendererImpl::stageFontData(const void* data, size_t len, size_t ex
 }
 
 void RendererImpl::materializeCells(const TerminalCell* input, GpuCell* output, u16 count, u8 lineAttribute, const TerminalColors& colors) {
-    CellExtraStore& extras = *composer.cellExtras;
+    CellExtraStore& extras = *composer.extras.store;
     const bool specialColors = colors.specialModes != 0;
     for (u16 index = 0; index < count; ++index) {
         const TerminalCell& cell = input[index];
@@ -1540,47 +1540,48 @@ void RendererImpl::stageArenaCopy(ArenaBuffer& arena, Vector<VkBufferCopy>& copi
     arena.uploaded = used;
 }
 
-void RendererImpl::stageArenaTails(Screen& shapes, u32 generation) {
+void RendererImpl::stageArenaTails(SpanShaper& shaper, u32 generation) {
     if (generation != stripGeneration) {
         // The strips moved wholesale (collection or font change): the
         // device copies restart from the beginning.
         fontResources->mask.uploaded = 0;
         fontResources->color.uploaded = 0;
     }
-    const size_t maskUsed = shapes.spanMaskUsed();
-    const size_t colorUsed = shapes.spanColorUsed() * sizeof(u32);
+    const size_t maskUsed = shaper.spanMaskUsed();
+    const size_t colorUsed = shaper.spanColorUsed() * sizeof(u32);
     ensureArenaBuffer(fontResources->mask, maskUsed);
     ensureArenaBuffer(fontResources->color, colorUsed);
-    stageArenaCopy(fontResources->mask, maskArenaCopies, shapes.spanMask(), maskUsed);
-    stageArenaCopy(fontResources->color, colorArenaCopies, (const u8*)(shapes.spanColor()), colorUsed);
+    stageArenaCopy(fontResources->mask, maskArenaCopies, shaper.spanMask(), maskUsed);
+    stageArenaCopy(fontResources->color, colorArenaCopies, (const u8*)(shaper.spanColor()), colorUsed);
 }
 
 void RendererImpl::applySpanStrips(u32 rowIndex, const ScreenRowSpan& span) {
     if (span.missing || span.end <= span.begin || span.end > cellColumns) {
         return;
     }
-    const u32 stride = (u32)(span.end - span.begin) * composer.glyphWidth;
+    const u32 stride = (u32)(span.end - span.begin) * composer.geometry.cellPixelWidth;
     for (u16 column = span.begin; column < span.end; ++column) {
         GpuCell& cell = cells.mut(rowIndex + column);
-        cell.strip = (span.offset + (u32)(column - span.begin) * composer.glyphWidth) | (span.color ? stripColorPlane : 0);
+        cell.strip = (span.offset + (u32)(column - span.begin) * composer.geometry.cellPixelWidth) | (span.color ? stripColorPlane : 0);
         cell.stripStride = stride;
     }
 }
 
-void RendererImpl::assignRowStrips(Screen& shapes, u16 row) {
+void RendererImpl::assignRowStrips(Screen& shapes, SpanShaper& shaper, u16 row) {
     const u32 rowIndex = (u32)(row)*cellColumns;
     GpuCell* const rowCells = cells.mutData() + rowIndex;
     for (u16 column = 0; column < cellColumns; ++column) {
         rowCells[column].strip = stripNone;
         rowCells[column].stripStride = 0;
     }
-    const size_t count = shapes.rowSpans(row, spanScratch.mutData());
+    const ScreenRowRef rowRef = shapes.viewRow(row);
+    const size_t count = shaper.rowSpans(rowRef.cells, cellColumns, rowRef.id, spanScratch.mutData());
     for (size_t index = 0; index < count; ++index) {
         applySpanStrips(rowIndex, spanScratch[index]);
     }
 }
 
-void RendererImpl::overrideOverlayStrips(Screen& shapes, const TerminalUpdate& update) {
+void RendererImpl::overrideOverlayStrips(SpanShaper& shaper, const TerminalUpdate& update) {
     if (update.overlayCount == 0) {
         return;
     }
@@ -1592,7 +1593,7 @@ void RendererImpl::overrideOverlayStrips(Screen& shapes, const TerminalUpdate& u
         cell.strip = stripNone;
         cell.stripStride = 0;
     }
-    const size_t count = shapes.shapeCells(update.overlayCells, update.overlayCount, update.overlayColumn, spanScratch.mutData());
+    const size_t count = shaper.shapeCells(update.overlayCells, update.overlayCount, update.overlayColumn, spanScratch.mutData());
     for (size_t index = 0; index < count; ++index) {
         applySpanStrips(rowIndex, spanScratch[index]);
     }
@@ -1600,6 +1601,7 @@ void RendererImpl::overrideOverlayStrips(Screen& shapes, const TerminalUpdate& u
 
 u32 RendererImpl::assignStrips(const TerminalUpdate& update, bool allRows) {
     Screen& shapes = *update.shapes;
+    SpanShaper& shaper = *composer.shaper;
     spanScratch.clear();
     spanScratch.grow(cellColumns);
     while (spanScratch.length() < cellColumns) {
@@ -1607,21 +1609,21 @@ u32 RendererImpl::assignStrips(const TerminalUpdate& update, bool allRows) {
     }
     // A shaping pass can collect the arenas and move every strip assigned
     // so far, so redo the walk until it closes within one generation.
-    bool everything = allRows || shapes.spanGeneration() != stripGeneration;
+    bool everything = allRows || shaper.spanGeneration() != stripGeneration;
     u32 generation;
     for (;;) {
-        generation = shapes.spanGeneration();
+        generation = shaper.spanGeneration();
         if (everything) {
             for (u16 row = 0; row < cellRows; ++row) {
-                assignRowStrips(shapes, row);
+                assignRowStrips(shapes, shaper, row);
             }
         } else {
             for (size_t index = 0; index < update.rowCount; ++index) {
-                assignRowStrips(shapes, (u16)(update.rows[index].row));
+                assignRowStrips(shapes, shaper, (u16)(update.rows[index].row));
             }
         }
-        overrideOverlayStrips(shapes, update);
-        if (generation == shapes.spanGeneration()) {
+        overrideOverlayStrips(shaper, update);
+        if (generation == shaper.spanGeneration()) {
             return generation;
         }
         everything = true;
@@ -1807,14 +1809,14 @@ void RendererImpl::recordCommands(FrameResources& frame, u32 imageIndex, const P
         bufferBarrier(frame.commandBuffer, frame.cellBuffer, (size_t)(updateCount) * sizeof(GpuCellUpdate), VK_ACCESS_HOST_WRITE_BIT, VK_ACCESS_SHADER_READ_BIT, VK_PIPELINE_STAGE_HOST_BIT, VK_PIPELINE_STAGE_COMPUTE_SHADER_BIT);
 
         const PushConstants pushConstants{
-            composer.glyphWidth,
-            composer.glyphHeight,
+            composer.geometry.cellPixelWidth,
+            composer.geometry.cellPixelHeight,
             composer.boxDrawingStroke(),
-            composer.columns,
-            composer.rows,
-            chain->direct ? chain->extent.width : composer.pixelWidth,
-            chain->direct ? chain->extent.height : composer.pixelHeight,
-            composer.borderPixels(),
+            composer.geometry.columns,
+            composer.geometry.rows,
+            chain->direct ? chain->extent.width : composer.geometry.pixelWidth,
+            chain->direct ? chain->extent.height : composer.geometry.pixelHeight,
+            composer.geometry.borderPixels,
             packColor(state.cursor.color),
             state.cursor.posX,
             state.cursor.posY,
@@ -2035,9 +2037,9 @@ bool RendererImpl::repaintFrame() {
 }
 
 bool RendererImpl::present(const TerminalUpdate& update) {
-    const u32 width = composer.pixelWidth;
-    const u32 height = composer.pixelHeight;
-    const size_t cellCount = (size_t)(composer.columns) * composer.rows;
+    const u32 width = composer.geometry.pixelWidth;
+    const u32 height = composer.geometry.pixelHeight;
+    const size_t cellCount = (size_t)(composer.geometry.columns) * composer.geometry.rows;
     if (cellCount == 0 || width == 0 || height == 0) {
         return false;
     }
@@ -2053,11 +2055,11 @@ bool RendererImpl::present(const TerminalUpdate& update) {
         return false;
     }
 
-    const bool shapeChanged = cellColumns != composer.columns || cellRows != composer.rows;
+    const bool shapeChanged = cellColumns != composer.geometry.columns || cellRows != composer.geometry.rows;
     if (shapeChanged) {
         // A reshaped grid needs every row before the retained cells mean
         // anything.
-        if (update.rowCount != composer.rows) {
+        if (update.rowCount != composer.geometry.rows) {
             return false;
         }
         for (size_t index = 0; index < update.rowCount; ++index) {
@@ -2071,15 +2073,15 @@ bool RendererImpl::present(const TerminalUpdate& update) {
     if (shapeChanged) {
         damage.begin = 0;
         damage.count = 0;
-        ensureDamageJournal(composer.rows);
+        ensureDamageJournal(composer.geometry.rows);
         cells.clear();
         cells.grow(cellCount);
         const GpuCell empty;
         for (size_t index = 0; index < cellCount; ++index) {
             cells.pushBack(empty);
         }
-        cellColumns = composer.columns;
-        cellRows = composer.rows;
+        cellColumns = composer.geometry.columns;
+        cellRows = composer.geometry.rows;
     } else {
         ensureDamageJournal(cellRows);
     }
@@ -2095,9 +2097,9 @@ bool RendererImpl::present(const TerminalUpdate& update) {
         materializeCells(update.overlayCells, cells.mutData() + (size_t)(update.overlayRow) * cellColumns + update.overlayColumn, update.overlayCount, 0, *update.colors);
     }
     u32 arenaGeneration = stripGeneration;
-    if (update.shapes != nullptr) {
+    if (update.shapes != nullptr && composer.shaper != nullptr) {
         arenaGeneration = assignStrips(update, shapeChanged || !previousStateValid);
-        stageArenaTails(*update.shapes, arenaGeneration);
+        stageArenaTails(*composer.shaper, arenaGeneration);
     }
     const bool stripsMoved = arenaGeneration != stripGeneration;
     stripGeneration = arenaGeneration;

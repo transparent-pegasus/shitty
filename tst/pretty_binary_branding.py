@@ -34,8 +34,9 @@ def main():
 
     offset = binary.find(FORBIDDEN)
     if offset >= 0:
+        context = binary[max(0, offset - 32) : offset + 40]
         raise SystemExit(
-            f"{source}: forbidden branding at byte offset {offset}"
+            f"{source}: forbidden branding at byte offset {offset}: {context!r}"
         )
 
 

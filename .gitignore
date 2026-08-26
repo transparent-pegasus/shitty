@@ -1,32 +1,35 @@
-/.build*/
-/build/
-/st
-/pt
-/pt_test
-/parser_perf
-/pt_test_prod_parser
-/st_test_prod_parser
-/pretty_binary_branding
-/st_memprofile
-/st_test
-/unit_tests
-/unit_tests_group_*
-/test_suite
-/test_suite_group_*
-/test_suite_prod_parser_group_*
-/main_fuzz
-/result
-/result-*
+# The build runner publishes a convenience symlink at the repo root for
+# every requested target, named after the target - an open-ended set
+# that grows with build.py. Ignore the whole root and whitelist the
+# sources instead of chasing names; a new real root file needs its own
+# ! line here, which is deliberate.
+/*
+!/.clang-format
+!/.github
+!/.gitignore
+!/CONTRIBUTING.md
+!/LICENSE
+!/LICENSE.GPL3
+!/LICENSE.MIT
+!/README.md
+!/STYLE.md
+!/STYLE_PRJ.md
+!/bin
+!/build
+!/build.py
+!/codecov.yml
+!/dev
+!/ext
+!/flake.lock
+!/flake.nix
+!/lib
+!/shell.nix
+!/tst
+
+# Anywhere in the tree.
 __pycache__/
 .codegraph/
-/plt_tests
-/plt_unit_tests
-/plt_wayland_integration_tests
-/plt_x11_integration_tests
-/platform_x11.plist
-/test_suite_prod_parser
+/bounce*.log
 /ext/plt/plt_unit_tests
 /ext/plt/plt_wayland_integration_tests
 /ext/plt/plt_x11_integration_tests
-/toml_dump
-/bounce*.log

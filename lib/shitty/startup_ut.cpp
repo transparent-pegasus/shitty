@@ -6,7 +6,7 @@
 
 #include "startup.h"
 
-#include "unicode_width.h"
+#include <lib/vterm/unicode_width.h>
 
 #include "brand.h"
 #include <std/str/view.h>

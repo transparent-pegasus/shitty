@@ -6,16 +6,17 @@
 
 #include "drop_target.h"
 
-#include "composer.h"
 #include "session.h"
-#include "vterm.h"
+#include "composer.h"
+
+#include <lib/vterm/vterm.h>
+
+#include <std/str/view.h>
+#include <std/ios/input.h>
+#include <std/ptr/scoped.h>
+#include <std/mem/obj_pool.h>
 
 #include <plt/drop.h>
-
-#include <std/ios/input.h>
-#include <std/mem/obj_pool.h>
-#include <std/ptr/scoped.h>
-#include <std/str/view.h>
 
 using namespace stl;
 

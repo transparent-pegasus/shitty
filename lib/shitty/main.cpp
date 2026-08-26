@@ -4,11 +4,12 @@
  * See the file LICENSE.MIT for the full license.
  */
 
-#include "application.h"
 #include "brand.h"
 #include "composer.h"
-#include "fatal.h"
-#include "vterm_headless.h"
+#include "application.h"
+
+#include <lib/vterm/fatal.h>
+#include <lib/vterm/vt_headless.h>
 
 #ifdef SHITTY_HEAP_PROFILE
     #include "heap_profile.h"
@@ -100,7 +101,7 @@ namespace {
 
         ObjPool::Ref pool = ObjPool::fromMemory();
         Composer& composer = *pool->make<Composer>(pool.mutPtr(), brand);
-        VtermHeadless* vterm = VtermHeadless::create(composer, nullptr);
+        VtermHeadless* vterm = VtermHeadless::create(*composer.pool, *composer.vtConfig.config, nullptr);
         Buffer data;
         size_t bytes = 0;
         const u64 started = monotonicNowUs();

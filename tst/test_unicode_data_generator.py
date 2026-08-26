@@ -8,7 +8,7 @@ from pathlib import Path
 
 
 ROOT = Path(__file__).resolve().parents[1]
-SCRIPT = ROOT / "lib" / "shitty" / "unicode_data.py"
+SCRIPT = ROOT / "lib" / "vterm" / "unicode_data.py"
 UNICODE_ROOT = ROOT / "ext" / "unicode"
 
 
